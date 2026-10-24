@@ -163,4 +163,4 @@ def library_actors(works, output: Path, names: ActorAliases, query: str = "") ->
                 "candidates": candidates,
             }
         )
-    return sorted(result, key=lambda row: (-row["count"], row["name"]))
+    return sorted(result, key=lambda row: (-row["count"], not row["portrait"], row["name"]))

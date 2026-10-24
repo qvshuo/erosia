@@ -86,13 +86,6 @@ export default function DirectoryBrowser({
               }
             }}
           />
-          <Button
-            variant="outline"
-            disabled={loading}
-            onClick={() => setTarget({ path })}
-          >
-            打开
-          </Button>
         </div>
         <div className="max-h-64 overflow-y-auto rounded-md border">
           {loading ? (

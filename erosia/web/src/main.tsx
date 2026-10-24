@@ -192,6 +192,7 @@ function App() {
       if (!value.configured) {
         setRoute("settings");
         history.replaceState(null, "", "#settings");
+        return;
       }
       await refresh();
     });
@@ -286,7 +287,7 @@ function App() {
                 navigate={(next) => run(() => navigate(next))}
               />
             ))}
-          {tab === "actors" && (
+          {tab === "actors" && (settings.configured ? (
             <Actors
               revision={String(actorRevision)}
               busy={busy}
@@ -300,7 +301,7 @@ function App() {
               run={run}
               navigate={(next) => run(() => navigate(next))}
             />
-          )}
+          ) : <Empty />)}
           {tab === "tasks" && (
             <Tasks
               tick={tasks.some((task) => task.id === route.split("/")[1] && active(task)) ? tick : 0}

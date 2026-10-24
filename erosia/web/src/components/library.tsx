@@ -231,7 +231,10 @@ export function Library({
                 </TableCell>
                 <TableCell>{categories[work.category]}</TableCell>
                 <TableCell>
-                  <Status status={work.status} />
+                  <Status
+                    status={work.status}
+                    label={work.status === "pending" ? "未刮削" : undefined}
+                  />
                 </TableCell>
               </TableRow>
             ))}

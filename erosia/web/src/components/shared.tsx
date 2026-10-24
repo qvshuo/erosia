@@ -48,7 +48,7 @@ export function SummaryHeader({
   );
 }
 
-export function Status({ status }: { status: string }) {
+export function Status({ status, label }: { status: string; label?: string }) {
   if (!statuses[status]) return null;
   return (
     <Badge
@@ -72,7 +72,7 @@ export function Status({ status }: { status: string }) {
             : "secondary"
       }
     >
-      {statuses[status] ?? status}
+      {label ?? statuses[status] ?? status}
     </Badge>
   );
 }
