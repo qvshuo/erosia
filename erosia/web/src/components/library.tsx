@@ -49,6 +49,7 @@ export function Library({
   const search = useDeferredValue(query.toLowerCase());
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState("fill_missing");
   const [pending, setPending] = useState(false);
@@ -64,9 +65,9 @@ export function Library({
       ),
     [works, search, filter],
   );
-  const pages = Math.max(1, Math.ceil(rows.length / 100)),
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize)),
     current = Math.min(page, pages);
-  const visible = rows.slice((current - 1) * 100, current * 100);
+  const visible = rows.slice((current - 1) * pageSize, current * pageSize);
   const chosen = works.filter((work) => selected.has(work.path) && valid(work));
   const eligible = visible.filter(valid);
   function toggle(paths: string[], checked: boolean) {
@@ -246,6 +247,8 @@ export function Library({
           pages={pages}
           total={rows.length}
           onChange={setPage}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
         />
       </div>
     </div>

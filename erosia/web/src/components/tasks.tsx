@@ -126,13 +126,14 @@ export function Tasks({
   const search = useDebounce(query);
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [pending, setPending] = useState(false);
   useEffect(() => {
     if (!id) return;
     const controller = new AbortController();
     run(async () => {
       const value = await api<TaskDetail>(
-        `tasks/${id}?page=${page}&status=${filter}&query=${encodeURIComponent(search)}`,
+        `tasks/${id}?page=${page}&page_size=${pageSize}&status=${filter}&query=${encodeURIComponent(search)}`,
         "GET",
         undefined,
         controller.signal,
@@ -140,7 +141,7 @@ export function Tasks({
       if (!controller.signal.aborted) setDetail(value);
     });
     return () => controller.abort();
-  }, [id, page, filter, search, tick, run]);
+  }, [id, page, pageSize, filter, search, tick, run]);
   async function mutate(task: Task, action: "retry" | "cancel" | "delete") {
     if (action === "delete" && !(await confirm("删除记录", "已有元数据保留")))
       return;
@@ -289,6 +290,8 @@ export function Tasks({
               pages={detail.pages}
               total={detail.matched}
               onChange={setPage}
+              pageSize={pageSize}
+              onPageSizeChange={setPageSize}
             />
           </>
         )}
@@ -299,7 +302,7 @@ export function Tasks({
       (filter === "all" || task.status === filter) &&
       `${task.sequence} ${formatDate(task.created_at)}`.includes(query),
   );
-  const pages = Math.max(1, Math.ceil(rows.length / 100)),
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize)),
     current = Math.min(page, pages);
   return (
     <div className="space-y-4">
@@ -343,7 +346,7 @@ export function Tasks({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.slice((current - 1) * 100, current * 100).map((task) => (
+            {rows.slice((current - 1) * pageSize, current * pageSize).map((task) => (
               <TableRow
                 key={task.id}
                 {...rowNavigation(() => navigate(`tasks/${task.id}`))}
@@ -394,6 +397,8 @@ export function Tasks({
           pages={pages}
           total={rows.length}
           onChange={setPage}
+          pageSize={pageSize}
+          onPageSizeChange={setPageSize}
         />
       </div>
     </div>

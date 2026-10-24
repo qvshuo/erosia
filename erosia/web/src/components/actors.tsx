@@ -47,6 +47,7 @@ export function Actors({
   const [filter, setFilter] = useState("all");
   const [actors, setActors] = useState<LibraryActor[]>([]);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [pending, setPending] = useState(false);
   useEffect(() => {
     if (name !== undefined) return;
@@ -65,7 +66,7 @@ export function Actors({
   const rows = actors.filter(
     (a) => filter === "all" || a.portrait_status === filter,
   );
-  const pages = Math.max(1, Math.ceil(rows.length / 100)),
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize)),
     current = Math.min(page, pages);
   async function portraits(actor?: LibraryActor) {
     setPending(true);
@@ -127,7 +128,7 @@ export function Actors({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.slice((current - 1) * 100, current * 100).map((a) => (
+              {rows.slice((current - 1) * pageSize, current * pageSize).map((a) => (
                 <TableRow
                   key={a.name}
                   {...rowNavigation(() =>
@@ -171,6 +172,8 @@ export function Actors({
             pages={pages}
             total={rows.length}
             onChange={setPage}
+            pageSize={pageSize}
+            onPageSizeChange={setPageSize}
           />
         </Card>
       </div>
@@ -213,6 +216,7 @@ function ActorDetail({
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   useEffect(() => {
     const controller = new AbortController();
     run(async () => {
@@ -237,7 +241,7 @@ function ActorDetail({
         .toLowerCase()
         .includes(query.toLowerCase()),
   );
-  const pages = Math.max(1, Math.ceil(rows.length / 100)),
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize)),
     current = Math.min(page, pages);
   return (
     <div className="space-y-5">
@@ -311,7 +315,7 @@ function ActorDetail({
                 </TableHeader>
                 <TableBody>
                   {rows
-                    .slice((current - 1) * 100, current * 100)
+                    .slice((current - 1) * pageSize, current * pageSize)
                     .map((work) => (
                       <TableRow
                         key={work.path}
@@ -342,6 +346,8 @@ function ActorDetail({
                 pages={pages}
                 total={rows.length}
                 onChange={setPage}
+                pageSize={pageSize}
+                onPageSizeChange={setPageSize}
               />
             </Card>
           </div>

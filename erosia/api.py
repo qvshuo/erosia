@@ -578,11 +578,11 @@ def create_app(
         return runner().runtime.tasks(ids.split(",") if ids is not None else None) if app.state.runner else []
 
     @app.get("/api/tasks/{task_id}")
-    async def task(task_id: str, page: int | None = None, status: str = "all", query: str = ""):
+    async def task(task_id: str, page: int | None = None, page_size: int = 100, status: str = "all", query: str = ""):
         record = runner().runtime.task(task_id)
         if page is None:
             return record
-        if page < 1 or status not in (
+        if page < 1 or page_size not in (100, 1000, 10000) or status not in (
             "all",
             "success",
             "failed",
@@ -603,11 +603,11 @@ def create_app(
             if (status == "all" or item["status"] == status)
             and query.casefold() in item["code"].casefold()
         ]
-        pages = max(1, (len(items) + 99) // 100)
+        pages = max(1, (len(items) + page_size - 1) // page_size)
         page = min(page, pages)
         return {
             **record,
-            "items": items[(page - 1) * 100 : page * 100],
+            "items": items[(page - 1) * page_size : page * page_size],
             "page": page,
             "pages": pages,
             "matched": len(items),

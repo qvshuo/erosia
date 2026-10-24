@@ -135,16 +135,33 @@ export function Pagination({
   pages,
   total,
   onChange,
+  pageSize,
+  onPageSizeChange,
 }: {
   page: number;
   pages: number;
   total: number;
   onChange: (page: number) => void;
+  pageSize: number;
+  onPageSizeChange: (pageSize: number) => void;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm">
       <span className="text-muted-foreground">共 {total} 条</span>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          label="每页条数"
+          value={String(pageSize)}
+          onChange={(value) => {
+            onPageSizeChange(Number(value));
+            onChange(1);
+          }}
+          options={{
+            100: "100 条/页",
+            1000: "1000 条/页",
+            10000: "10000 条/页",
+          }}
+        />
         <Button
           variant="outline"
           size="icon"
