@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-label="erosia">
+  <title>erosia</title>
+  <rect width="640" height="360" fill="#171717"/>
+  <g transform="translate(60 52) scale(.5)"><path d="M164 256h184c0-56-36-92-92-92s-92 36-92 92 38 92 92 92c35 0 64-11 83-33" fill="none" stroke="#fafafa" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="300" y="205" fill="#fafafa" font-family="Arial, sans-serif" font-size="80" font-weight="600" letter-spacing="-4">erosia</text>
+</svg>

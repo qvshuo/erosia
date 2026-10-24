@@ -1,6 +1,6 @@
 services:
-  eros:
-    image: eros:0.4.0
+  erosia:
+    image: erosia:1.0.0
     build: .
     restart: unless-stopped
     ports:
@@ -29,3 +29,16 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  web:
+    profiles: [dev]
+    build:
+      context: .
+      target: frontend
+    command: sh -c "bun install --frozen-lockfile && bun run dev"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./erosia/web:/build:ro
+      - /build/node_modules
+    depends_on:
+      - erosia

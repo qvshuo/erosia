@@ -1,0 +1,401 @@
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import {
+  api,
+  active,
+  categories,
+  formatDate,
+  sources,
+  stages,
+} from "@/lib/api";
+import type {
+  ProgressEvent,
+  Report,
+  Task,
+  TaskDetail,
+  Work,
+} from "@/lib/types";
+import {
+  Empty,
+  WorkTitle,
+  Pagination,
+  SearchInput,
+  Select,
+  Status,
+  useDebounce,
+  rowNavigation,
+  type Confirm,
+} from "./shared";
+
+export function Process({
+  events,
+  running,
+}: {
+  events: ProgressEvent[];
+  running?: boolean;
+}) {
+  const event = events.at(-1);
+  if (!event || !running) return null;
+  return (
+    <p className="text-sm text-muted-foreground">
+      {event.source ? `${sources[event.source] ?? event.source} · ` : ""}
+      {event.stage === "wait"
+        ? event.message
+        : (stages[event.stage] ?? "正在处理")}
+    </p>
+  );
+}
+
+export function Diagnostics({ report }: { report: Report | null | undefined }) {
+  if (!report) return null;
+  const notices = [
+    report.error,
+    ...(report.warnings ?? [])
+      .filter(
+        (warning) =>
+          !warning.includes("used webpage fallback") &&
+          !warning.includes("missing plot") &&
+          !warning.includes("missing artwork") &&
+          !report.sources?.some(
+            (source) =>
+              source.status !== "found" &&
+              warning.startsWith(`${source.source}:`),
+          ),
+      )
+      .map((warning) => {
+        const source = Object.keys(sources).find((source) =>
+          warning.startsWith(source + ":"),
+        );
+        return (
+          source ? sources[source] + warning.slice(source.length) : warning
+        )
+          .replace("missing plot", "缺少剧情")
+          .replace("missing artwork", "缺少图片");
+      }),
+    ...(report.translation_errors ?? []).map((item) => `翻译：${item.error}`),
+    ...(report.images ?? [])
+      .filter((item) => item.status === "error")
+      .map((item) => `图片：${item.message ?? item.error}`),
+    ...(report.portraits ?? [])
+      .filter((item) => item.status === "error")
+      .map((item) => `头像：${item.name} · ${item.error}`),
+  ].filter(Boolean);
+  if (!notices.length && !report.partial) return null;
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-muted-foreground">
+      <p className="font-medium text-foreground">待处理问题</p>
+      {report.partial && <p>部分内容未完成，可重试未完成项</p>}
+      {[...new Set(notices)].map((notice, index) => (
+        <p key={index} className="break-words">
+          {notice}
+        </p>
+      ))}
+    </div>
+  );
+}
+export function Tasks({
+  tick,
+  tasks,
+  id,
+  works,
+  refresh,
+  run,
+  navigate,
+  confirm,
+}: {
+  tick: number;
+  tasks: Task[];
+  id?: string;
+  works: Work[];
+  refresh: () => Promise<void>;
+  run: (fn: () => Promise<void>) => void;
+  navigate: (path: string) => void;
+  confirm: Confirm;
+}) {
+  const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [query, setQuery] = useState("");
+  const search = useDebounce(query);
+  const [filter, setFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const [pending, setPending] = useState(false);
+  useEffect(() => {
+    if (!id) return;
+    const controller = new AbortController();
+    run(async () => {
+      const value = await api<TaskDetail>(
+        `tasks/${id}?page=${page}&status=${filter}&query=${encodeURIComponent(search)}`,
+        "GET",
+        undefined,
+        controller.signal,
+      );
+      if (!controller.signal.aborted) setDetail(value);
+    });
+    return () => controller.abort();
+  }, [id, page, filter, search, tick, run]);
+  async function mutate(task: Task, action: "retry" | "cancel" | "delete") {
+    if (action === "delete" && !(await confirm("删除记录", "已有元数据保留")))
+      return;
+    setPending(true);
+    try {
+      await api(
+        `tasks/${task.id}${action === "delete" ? "" : `/${action}`}`,
+        action === "delete" ? "DELETE" : "POST",
+      );
+      await refresh();
+    } finally {
+      setPending(false);
+    }
+  }
+  const workByCode = useMemo(
+    () => new Map(works.map((work) => [work.code, work])),
+    [works],
+  );
+  function action(task: Task) {
+    return active(task) ? (
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() => run(() => mutate(task, "cancel"))}
+      >
+        取消
+      </Button>
+    ) : task.failed || task.partial || task.status === "cancelled" ? (
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() => run(() => mutate(task, "retry"))}
+      >
+        重试
+      </Button>
+    ) : null;
+  }
+  if (id)
+    return (
+      <div className="space-y-4">
+        <Button variant="ghost" onClick={() => navigate("tasks")}>
+          <ArrowLeft />
+          返回
+        </Button>
+        {!detail ? (
+          <Empty>正在读取…</Empty>
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <h2 className="text-xl font-semibold">#{detail.sequence}</h2>
+                <Status status={detail.status} />
+              </div>
+              {active(detail) && action(detail)}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              成功 {detail.success} · 未完成{" "}
+              {detail.failed + (detail.partial ?? 0)} · 跳过 {detail.skipped}
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <SearchInput
+                value={query}
+                onChange={(value) => {
+                  setQuery(value);
+                  setPage(1);
+                }}
+              />
+              <Select
+                label="筛选结果"
+                value={filter}
+                onChange={(value) => {
+                  setFilter(value);
+                  setPage(1);
+                }}
+                options={{
+                  all: "全部结果",
+                  failed: "失败",
+                  partial: "部分完成",
+                  success: "已完成",
+                  running: "进行中",
+                  pending: "等待中",
+                  cancelled: "已取消",
+                }}
+              />
+            </div>
+            {detail.error && (
+              <p role="alert" className="text-sm text-destructive">
+                {detail.error}
+              </p>
+            )}
+            <div className="overflow-hidden rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-28 pl-4">作品</TableHead>
+                    <TableHead className="w-[42%]">标题</TableHead>
+                    <TableHead className="w-[22%]">演员</TableHead>
+                    <TableHead className="w-20">分类</TableHead>
+                    <TableHead className="w-24">状态</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detail.items.map((item) => {
+                    const work = workByCode.get(item.code);
+                    return (
+                      <TableRow
+                        key={item.code}
+                        aria-label={`查看 ${item.code}`}
+                        {...(work
+                          ? rowNavigation(() =>
+                              navigate(
+                                `library/work/${encodeURIComponent(work.path)}/${detail.id}`,
+                              ),
+                            )
+                          : {})}
+                      >
+                        <TableCell className="pl-4 font-medium">
+                          {item.code}
+                        </TableCell>
+                        <TableCell>
+                          <WorkTitle title={work?.title} />
+                        </TableCell>
+                        <TableCell
+                          className="truncate"
+                          title={work?.actors?.join("、")}
+                        >
+                          {work?.actors?.join("、") || "—"}
+                        </TableCell>
+                        <TableCell>
+                          {work ? categories[work.category] : "—"}
+                        </TableCell>
+                        <TableCell>
+                          <Status status={item.status} />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+              {!detail.items.length && <Empty />}
+            </div>
+            <Pagination
+              page={detail.page}
+              pages={detail.pages}
+              total={detail.matched}
+              onChange={setPage}
+            />
+          </>
+        )}
+      </div>
+    );
+  const rows = tasks.filter(
+    (task) =>
+      (filter === "all" || task.status === filter) &&
+      `${task.sequence} ${formatDate(task.created_at)}`.includes(query),
+  );
+  const pages = Math.max(1, Math.ceil(rows.length / 100)),
+    current = Math.min(page, pages);
+  return (
+    <div className="space-y-4">
+      <div className="overflow-hidden rounded-lg border">
+        <div className="flex flex-wrap gap-3 border-b p-4">
+          <SearchInput
+            label="搜索任务"
+            value={query}
+            onChange={(value) => {
+              setQuery(value);
+              setPage(1);
+            }}
+          />
+          <Select
+            label="筛选任务"
+            value={filter}
+            onChange={(value) => {
+              setFilter(value);
+              setPage(1);
+            }}
+            options={{
+              all: "全部任务",
+              running: "进行中",
+              pending: "等待中",
+              finished: "已结束",
+              cancelled: "已取消",
+            }}
+          />
+        </div>
+        <Table className="min-w-[760px] [&_th:first-child]:pl-4 [&_td:first-child]:pl-4">
+          <TableHeader>
+            <TableRow>
+              {["任务", "时间", "进度", "状态", ""].map((label, index) => (
+                <TableHead
+                  key={index}
+                  className={["w-20", "w-60", "w-28", "w-28", "w-36"][index]}
+                >
+                  {label}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.slice((current - 1) * 100, current * 100).map((task) => (
+              <TableRow
+                key={task.id}
+                {...rowNavigation(() => navigate(`tasks/${task.id}`))}
+                aria-label={`查看任务 #${task.sequence}`}
+              >
+                <TableCell>
+                  #{task.sequence}
+                  {task.params?.source_id && (
+                    <span className="ml-2 text-sm text-muted-foreground">
+                      {sources[task.params.source_id]}
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-sm">
+                  {formatDate(task.created_at)}
+                </TableCell>
+                <TableCell>
+                  {task.progress ??
+                    task.success +
+                      task.failed +
+                      (task.partial ?? 0) +
+                      task.skipped}
+                  /{task.total}
+                </TableCell>
+                <TableCell>
+                  <Status status={task.status} />
+                </TableCell>
+                <TableCell onClick={(event) => event.stopPropagation()}>
+                  <div className="flex items-center justify-end gap-1">
+                    {action(task)}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={pending || active(task)}
+                      onClick={() => run(() => mutate(task, "delete"))}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {!rows.length && <Empty />}
+        <Pagination
+          page={current}
+          pages={pages}
+          total={rows.length}
+          onChange={setPage}
+        />
+      </div>
+    </div>
+  );
+}

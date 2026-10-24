@@ -1,0 +1,482 @@
+import { lazy, Suspense, useEffect, useState } from "react";
+import { FolderOpen, Plus, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { api, categories, sources } from "@/lib/api";
+import type { Settings as Preferences } from "@/lib/types";
+import {
+  Empty,
+  Field,
+  StickyActions,
+  type Confirm,
+  type EditReporter,
+} from "./shared";
+
+const DirectoryBrowser = lazy(() => import("./directory-browser"));
+function settingsDraft({
+  configured: _configured,
+  translation_status: _translationStatus,
+  default_routes: _defaultRoutes,
+  source_defaults: _defaults,
+  source_intervals: _intervals,
+  routes,
+  ...value
+}: Preferences) {
+  return {
+    ...value,
+    routes: Object.fromEntries(
+      Object.entries(routes).map(([key, route]) => [key, route.join(", ")]),
+    ),
+  };
+}
+export function Settings({
+  settings,
+  saved,
+  run,
+  confirm,
+  reportEdit,
+}: {
+  settings: Preferences;
+  saved: (settings: Preferences) => void;
+  run: (fn: () => Promise<void>) => void;
+  confirm: Confirm;
+  reportEdit: EditReporter;
+}) {
+  const [draft, setDraft] = useState(() => settingsDraft(settings));
+  const [pending, setPending] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    valid: boolean;
+    message: string;
+    sample?: string;
+    elapsed_seconds?: number;
+  } | null>(null);
+  const [browser, setBrowser] = useState<{
+    kind: string;
+    path: string;
+    choose: (path: string) => void;
+  } | null>(null);
+  const changed =
+    JSON.stringify(draft) !== JSON.stringify(settingsDraft(settings));
+  useEffect(() => {
+    reportEdit({ dirty: changed, saving: pending });
+    return () => reportEdit({ dirty: false, saving: false });
+  }, [changed, pending, reportEdit]);
+  function update<K extends keyof typeof draft>(
+    key: K,
+    value: (typeof draft)[K],
+  ) {
+    if (key === "translation") setTestResult(null);
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+  async function save() {
+    if (
+      settings.metadata_directory !== draft.metadata_directory &&
+      !(await confirm("切换目录", "现有资料保留在原文件夹"))
+    )
+      return;
+    setPending(true);
+    try {
+      const value = await api<Preferences>("settings", "PUT", {
+        ...draft,
+        routes: Object.fromEntries(
+          Object.entries(draft.routes).map(([key, route]) => [
+            key,
+            route
+              .split(/[,，]/)
+              .map((source) => source.trim())
+              .filter(Boolean),
+          ]),
+        ),
+      });
+      setDraft(settingsDraft(value));
+      saved(value);
+    } finally {
+      setPending(false);
+    }
+  }
+  function pathInput(
+    kind: "media" | "metadata",
+    value: string,
+    choose: (path: string) => void,
+  ) {
+    return (
+      <div className="flex gap-2">
+        <Input
+          aria-label={kind === "media" ? "作品目录" : "元数据目录"}
+          required
+          value={value}
+          onChange={(event) => choose(event.target.value)}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          aria-label="选择文件夹"
+          onClick={() => setBrowser({ kind, path: value, choose })}
+        >
+          <FolderOpen />
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-5">
+      <form
+        className="space-y-5 pb-8"
+        onSubmit={(event) => {
+          event.preventDefault();
+          run(save);
+        }}
+      >
+        <fieldset disabled={pending} className="space-y-5">
+          <section className="space-y-4 rounded-lg border p-4">
+            <h3 className="text-lg font-semibold">目录设置</h3>
+            <Field label="作品目录">
+              {draft.media_directories.map((path, index) => (
+                <div className="flex gap-2" key={index}>
+                  <div className="min-w-0 flex-1">
+                    {pathInput("media", path, (value) =>
+                      update(
+                        "media_directories",
+                        draft.media_directories.map((old, i) =>
+                          i === index ? value : old,
+                        ),
+                      ),
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="移除目录"
+                    onClick={() =>
+                      update(
+                        "media_directories",
+                        draft.media_directories.filter((_, i) => i !== index),
+                      )
+                    }
+                  >
+                    <X />
+                  </Button>
+                </div>
+              ))}
+            </Field>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setBrowser({
+                  kind: "media",
+                  path: "",
+                  choose: (path) =>
+                    update("media_directories", [
+                      ...draft.media_directories,
+                      path,
+                    ]),
+                })
+              }
+            >
+              <Plus />
+              添加目录
+            </Button>
+            <Field label="元数据目录">
+              <div className="pr-11">
+                {pathInput("metadata", draft.metadata_directory ?? "", (path) =>
+                  update("metadata_directory", path),
+                )}
+              </div>
+            </Field>
+          </section>
+          <section className="space-y-4 rounded-lg border p-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold">翻译设置</h3>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending || testing}
+                onClick={() =>
+                  run(async () => {
+                    setTesting(true);
+                    try {
+                      setTestResult(
+                        await api(
+                          "translation/test",
+                          "POST",
+                          draft.translation,
+                        ),
+                      );
+                    } catch (error) {
+                      setTestResult({
+                        valid: false,
+                        message:
+                          error instanceof Error ? error.message : "测试失败",
+                      });
+                    } finally {
+                      setTesting(false);
+                    }
+                  })
+                }
+              >
+                {testing ? "测试中" : "测试服务"}
+              </Button>
+            </div>
+            {testResult && (
+              <div
+                role="status"
+                className={`rounded-md border p-3 text-sm ${testResult.valid ? "border-emerald-500/30 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5 text-destructive"}`}
+              >
+                <p>
+                  {testResult.message}
+                  {testResult.elapsed_seconds !== undefined
+                    ? ` · ${testResult.elapsed_seconds.toFixed(2)} 秒`
+                    : ""}
+                </p>
+                {testResult.sample && (
+                  <p className="mt-2 text-foreground">{testResult.sample}</p>
+                )}
+              </div>
+            )}
+            <fieldset disabled={testing} className="grid gap-4 sm:grid-cols-2">
+              <Field label="接口地址">
+                <Input
+                  type="url"
+                  value={draft.translation.endpoint}
+                  onChange={(e) =>
+                    update("translation", {
+                      ...draft.translation,
+                      endpoint: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="模型">
+                <Input
+                  value={draft.translation.model}
+                  onChange={(e) =>
+                    update("translation", {
+                      ...draft.translation,
+                      model: e.target.value,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="API Key">
+                <Secret
+                  value={draft.translation.api_key}
+                  change={(api_key) =>
+                    update("translation", { ...draft.translation, api_key })
+                  }
+                />
+              </Field>
+              <Field label="翻译超时">
+                <Input
+                  type="number"
+                  min={1}
+                  value={draft.translation.timeout_seconds}
+                  onChange={(e) =>
+                    update("translation", {
+                      ...draft.translation,
+                      timeout_seconds: e.target.valueAsNumber,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="翻译间隔">
+                <Input
+                  type="number"
+                  min={0}
+                  value={draft.translation.interval_seconds}
+                  onChange={(e) =>
+                    update("translation", {
+                      ...draft.translation,
+                      interval_seconds: e.target.valueAsNumber,
+                    })
+                  }
+                />
+              </Field>
+            </fieldset>
+          </section>
+          <section className="rounded-lg border p-4">
+            <h3 className="text-lg font-semibold">来源设置</h3>
+            <div className="mt-4 space-y-4">
+              {Object.entries(sources).map(([id, name]) => {
+                const site = draft.sites[id] ?? {
+                  base_url: null,
+                  interval_seconds: null,
+                };
+                return (
+                  <section key={id} className="border-b pb-3 last:border-0">
+                    <h4 className="text-base font-medium">{name}</h4>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <Field label="站点地址">
+                        <Input
+                          type="url"
+                          value={site.base_url ?? ""}
+                          placeholder={settings.source_defaults[id]}
+                          onChange={(e) =>
+                            update("sites", {
+                              ...draft.sites,
+                              [id]: {
+                                ...site,
+                                base_url: e.target.value || null,
+                              },
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="作品间隔">
+                        <Input
+                          type="number"
+                          min={0}
+                          step={5}
+                          value={site.interval_seconds ?? ""}
+                          placeholder={String(
+                            settings.source_intervals[id] ?? "",
+                          )}
+                          onChange={(e) =>
+                            update("sites", {
+                              ...draft.sites,
+                              [id]: {
+                                ...site,
+                                interval_seconds: e.target.value
+                                  ? e.target.valueAsNumber
+                                  : null,
+                              },
+                            })
+                          }
+                        />
+                      </Field>
+                      {id === "javdb" && (
+                        <Field label="Cookie">
+                          <Secret
+                            value={site.cookie ?? ""}
+                            change={(cookie) =>
+                              update("sites", {
+                                ...draft.sites,
+                                [id]: { ...site, cookie },
+                              })
+                            }
+                          />
+                        </Field>
+                      )}
+                    </div>
+                  </section>
+                );
+              })}
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-base font-medium">来源排序</h3>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() =>
+                    setDraft({
+                      ...draft,
+                      routes: Object.fromEntries(
+                        Object.entries(settings.default_routes).map(
+                          ([key, value]) => [key, value.join(", ")],
+                        ),
+                      ),
+                    })
+                  }
+                >
+                  恢复默认
+                </Button>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {Object.entries(categories).map(([id, name]) => (
+                  <Field label={name} key={id}>
+                    <Input
+                      required
+                      value={draft.routes[id]}
+                      onChange={(e) =>
+                        update("routes", {
+                          ...draft.routes,
+                          [id]: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                ))}
+              </div>
+            </div>
+          </section>
+          <section className="rounded-lg border p-4">
+            <h3 className="text-lg font-semibold">网络设置</h3>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              {(
+                [
+                  ["timeout_seconds", "请求超时"],
+                  ["source_timeout_seconds", "来源超时"],
+                  ["retries", "重试次数"],
+                  ["retry_delay_seconds", "重试间隔"],
+                ] as const
+              ).map(([key, label]) => (
+                <Field key={key} label={label}>
+                  <Input
+                    type="number"
+                    min={key === "retries" ? 0 : 1}
+                    max={key === "retries" ? 3 : undefined}
+                    value={draft[key]}
+                    onChange={(e) => update(key, e.target.valueAsNumber)}
+                  />
+                </Field>
+              ))}
+              <Field label="FlareSolverr">
+                <Input
+                  type="url"
+                  value={draft.flaresolverr_url ?? ""}
+                  placeholder="留空关闭"
+                  onChange={(e) =>
+                    update("flaresolverr_url", e.target.value || null)
+                  }
+                />
+              </Field>
+            </div>
+          </section>
+        </fieldset>
+        <StickyActions>
+          <Button
+            type="submit"
+            disabled={pending || !changed || !draft.media_directories.length}
+          >
+            {pending ? "保存中" : "保存设置"}
+          </Button>
+        </StickyActions>
+      </form>
+      {browser && (
+        <Suspense fallback={<Empty>正在载入…</Empty>}>
+          <DirectoryBrowser
+            kind={browser.kind}
+            initial={browser.path}
+            choose={(path) => {
+              browser.choose(path);
+              setBrowser(null);
+            }}
+            close={() => setBrowser(null)}
+          />
+        </Suspense>
+      )}
+    </div>
+  );
+}
+function Secret({
+  value,
+  change,
+}: {
+  value: string;
+  change: (value: string) => void;
+}) {
+  return (
+    <Input
+      type="password"
+      autoComplete="off"
+      value={value}
+      onFocus={(e) => {
+        if (value === "***") e.target.select();
+      }}
+      onChange={(e) => change(e.target.value)}
+    />
+  );
+}
