@@ -36,6 +36,25 @@ import {
   type Confirm,
 } from "./shared";
 
+function TaskSummary({ task }: { task: Task }) {
+  const counts = [
+    `总计 ${task.total}`,
+    `成功 ${task.success}`,
+    `跳过 ${task.skipped}`,
+    `失败 ${task.failed}`,
+    ...(task.partial ? [`待补全 ${task.partial}`] : []),
+  ];
+  return (
+    <span className="inline-flex flex-wrap gap-x-1 text-sm text-muted-foreground tabular-nums">
+      {counts.map((count, index) => (
+        <span key={count} className="whitespace-nowrap">
+          {index > 0 && "· "}{count}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function Process({
   events,
   running,
@@ -199,10 +218,7 @@ export function Tasks({
               </div>
               {active(detail) && action(detail)}
             </div>
-            <p className="text-sm text-muted-foreground">
-              成功 {detail.success} · 未完成{" "}
-              {detail.failed + (detail.partial ?? 0)} · 跳过 {detail.skipped}
-            </p>
+            <TaskSummary task={detail} />
             <div className="flex flex-wrap gap-3">
               <SearchInput
                 value={query}
@@ -332,13 +348,13 @@ export function Tasks({
             }}
           />
         </div>
-        <Table className="min-w-[760px] [&_th:first-child]:pl-4 [&_td:first-child]:pl-4">
+        <Table className="min-w-[840px] [&_th:first-child]:pl-4 [&_td:first-child]:pl-4">
           <TableHeader>
             <TableRow>
-              {["任务", "时间", "进度", "状态", ""].map((label, index) => (
+              {["任务", "时间", "统计", "状态", ""].map((label, index) => (
                 <TableHead
                   key={index}
-                  className={["w-20", "w-60", "w-28", "w-28", "w-36"][index]}
+                  className={["w-20", "w-52", "w-80", "w-24", "w-32"][index]}
                 >
                   {label}
                 </TableHead>
@@ -364,12 +380,7 @@ export function Tasks({
                   {formatDate(task.created_at)}
                 </TableCell>
                 <TableCell>
-                  {task.progress ??
-                    task.success +
-                      task.failed +
-                      (task.partial ?? 0) +
-                      task.skipped}
-                  /{task.total}
+                  <TaskSummary task={task} />
                 </TableCell>
                 <TableCell>
                   <Status status={task.status} />
