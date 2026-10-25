@@ -2,14 +2,12 @@ import type { WorkDetail } from "./types";
 import { statuses } from "./api";
 
 const phases: Record<string, string> = {
-  request: "访问页面",
-  response: "解析页面",
-  source: "正在刮削",
-  challenge: "处理访问验证",
-  retry: "重试请求",
+  request: "请求数据",
+  response: "收到响应",
+  challenge: "访问验证",
+  retry: "等待重试",
 };
 const outcomes: Record<string, string> = {
-  not_found: "未找到匹配番号",
   unsupported: "不支持此番号类型",
 };
 
@@ -19,6 +17,7 @@ const idle = {
   message: "",
   elapsed: undefined,
   action: "刮削",
+  label: undefined,
 };
 
 export function sourceProgress(
@@ -79,17 +78,20 @@ export function sourceProgress(
       ? event.stage === "wait"
         ? "pending"
         : event.status
-      : "missing");
+      : started && process?.status === "cancelled"
+        ? "cancelled"
+        : "missing");
   if (!statuses[status]) return idle;
   let elapsed =
     result?.elapsed_seconds ??
-    (started && (active || finished)
+    (started && (finished || (active && !result))
       ? ((finished ? Date.parse(finished.time) : now) -
           Date.parse(started.time)) /
         1000
       : undefined);
   let phase = "";
   let message = "";
+  let label: string | undefined;
   if (status === "found") {
     const metadata = result === current ? current?.metadata : undefined;
     const artwork = metadata?.artwork;
@@ -110,13 +112,32 @@ export function sourceProgress(
         : "",
       typeof plot === "boolean" ? (plot ? "有剧情" : "无剧情") : "",
     ].filter(Boolean);
-    message = facts.join(" · ") || "上次刮削成功，但未保留该来源的详细结果";
+    message = facts.join(" · ") || "未保留来源详情";
   } else if (status === "pending" || status === "running") {
-    phase =
-      event?.stage === "wait" ? "等待来源" : (phases[event?.stage ?? ""] ?? "");
-    message = event?.stage === "wait" ? event.message || "" : "";
+    if (event?.stage === "wait") {
+      if (event.message === "等待来源队列") {
+        label = "排队中";
+        message = "该来源正在处理其他作品";
+      } else if (event.message?.startsWith("等待作品间隔")) {
+        label = "间隔等待";
+        message = "按设置的作品间隔访问";
+      } else {
+        message = event.message || "";
+      }
+    } else {
+      label = "刮削中";
+      phase =
+        event?.stage === "source"
+          ? event.message === "打开网页"
+            ? "改用网页"
+            : event.message || ""
+          : phases[event?.stage ?? ""] ?? "";
+      if (event?.stage === "retry") message = "网络请求失败";
+    }
   } else if (status !== "missing") {
     message = result?.message || outcomes[status] || "";
+  } else if (started && !active) {
+    message = "未记录来源结果";
   }
   if (
     elapsed === undefined ||
@@ -131,5 +152,5 @@ export function sourceProgress(
       : ["missing", "pending", "running"].includes(status)
         ? "刮削"
         : "重试";
-  return { status, phase, message, elapsed, action };
+  return { status, phase, message, elapsed, action, label };
 }

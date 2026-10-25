@@ -33,9 +33,13 @@ class ActorAliases:
                 )
         self.actors = actors
         owners: dict[str, set[str]] = {}
+        primary_owners: dict[str, set[str]] = {}
         for name, record in actors.items():
+            primary_owners.setdefault(comparison_name(name), set()).add(name)
             for alias in [name, *record["aliases"]]:
                 owners.setdefault(comparison_name(alias), set()).add(name)
+        # A primary name is authoritative even when another record lists it as an alias.
+        owners.update(primary_owners)
         self.aliases = {
             alias: next(iter(names)) for alias, names in owners.items() if len(names) == 1
         }

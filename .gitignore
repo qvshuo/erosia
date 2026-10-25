@@ -4,3 +4,4 @@ node_modules/
 /erosia/web/dist/
 /docker-compose.yml
 /data/
+/temp/

@@ -36,6 +36,12 @@ import {
   type Confirm,
 } from "./shared";
 
+const portraitOutcomes: Record<string, string> = {
+  saved: "头像已保存",
+  error: "头像获取失败",
+  not_found: "未找到头像",
+};
+
 function TaskSummary({ task }: { task: Task }) {
   const counts = [
     `总计 ${task.total}`,
@@ -62,16 +68,16 @@ export function Process({
   events: ProgressEvent[];
   running?: boolean;
 }) {
-  const event = events.at(-1);
-  if (!event || !running) return null;
-  return (
-    <p className="text-sm text-muted-foreground">
-      {event.source ? `${sources[event.source] ?? event.source} · ` : ""}
-      {event.stage === "wait"
-        ? event.message
-        : (stages[event.stage] ?? "正在处理")}
-    </p>
+  const event = events.findLast(
+    (item) => item.stage in stages || item.stage === "finished",
   );
+  if (!event || !running) return null;
+  const label =
+    event.stage === "portraits" && event.status !== "running"
+      ? portraitOutcomes[event.status]
+      : stages[event.stage];
+  if (!label) return null;
+  return <p className="text-sm text-muted-foreground">{label}</p>;
 }
 
 export function Diagnostics({ report }: { report: Report | null | undefined }) {
@@ -112,7 +118,7 @@ export function Diagnostics({ report }: { report: Report | null | undefined }) {
   return (
     <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-muted-foreground">
       <p className="font-medium text-foreground">待处理问题</p>
-      {report.partial && <p>部分内容未完成，可重试未完成项</p>}
+      {report.partial && <p>部分阶段未完成</p>}
       {[...new Set(notices)].map((notice, index) => (
         <p key={index} className="break-words">
           {notice}

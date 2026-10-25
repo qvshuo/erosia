@@ -98,19 +98,11 @@ export const statuses: Record<string, string> = {
   unsupported: "不支持",
 };
 export const stages: Record<string, string> = {
-  source: "数据源",
-  challenge: "访问助手",
-  translation: "翻译",
+  translation: "翻译文本",
   metadata: "保存元数据",
   images: "下载图片",
-  portraits: "演员头像",
+  portraits: "获取头像",
   crop: "裁剪封面",
-  retry: "重试",
-  finished: "完成",
-  wait: "访问间隔",
-  request: "访问",
-  response: "响应",
-  metadata_found: "解析元数据",
 };
 export const active = (value: { status: string }) =>
   ["pending", "running"].includes(value.status);

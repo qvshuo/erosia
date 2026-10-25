@@ -1,6 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-label="erosia">
   <title>erosia</title>
-  <rect width="640" height="360" fill="#171717"/>
-  <g transform="translate(60 52) scale(.5)"><path d="M164 256h184c0-56-36-92-92-92s-92 36-92 92 38 92 92 92c35 0 64-11 83-33" fill="none" stroke="#fafafa" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/></g>
-  <text x="300" y="205" fill="#fafafa" font-family="Arial, sans-serif" font-size="80" font-weight="600" letter-spacing="-4">erosia</text>
+  <g transform="translate(156.16 16.16) scale(.64)">
+    <path d="M394 102C288 54 163 96 100 196c-50 83-18 178 58 222-37-67-28-138 22-183 70 6 148-36 174-88-71 32-125 41-170 30 87-14 153-38 210-75Z" fill="#000"/>
+    <path d="M155 264c60 32 139 14 180-34-26 82-99 128-173 113 20 40 59 69 106 83-85 5-143-55-113-162Z" fill="#000"/>
+    <g fill="none" stroke="#000" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M361 150c16 26 17 45 12 63l32 36-23 10c4 32-11 62-44 64"/>
+      <path d="M316 220q17-11 32-4" stroke-width="13"/>
+    </g>
+  </g>
 </svg>

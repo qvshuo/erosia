@@ -189,9 +189,9 @@ def crop_box(width: int, height: int, faces: list[list[float]]) -> tuple[int, in
     if faces:
 
         def score(face):
-            fx, fy, fw, fh, confidence = face
-            distance = abs(fx + fw / 2 - width / 2) / width
-            return fw * fh * confidence * (1 - 0.25 * distance)
+            _, _, fw, fh, confidence = face
+            # Cover spreads place the main portrait off-center; position is not face quality.
+            return fw * fh * confidence**2
 
         fx, fy, fw, fh, _ = max(faces, key=score)
         x, y = fx + fw / 2 - w / 2, fy - h * 0.15
@@ -350,7 +350,7 @@ class Gfriends:
 
     def select(self, name: str) -> str | None:
         if comparison_name(name) in self.names.ambiguous:
-            raise ValueError("actor name is ambiguous")
+            raise ValueError("演员别名对应多人")
         primary = self.names.resolve(name) or name
         candidates = [
             primary,
@@ -406,13 +406,13 @@ class Gfriends:
                 records.append(self.completed[(name, replace)])
                 continue
             try:
-                if comparison_name(name) in self.names.ambiguous:
-                    raise ValueError("actor name is ambiguous")
                 existing = actor_image(self.output, name)
                 if existing and not replace:
                     records.append({"name": name, "status": "existing"})
                     self.completed[(name, replace)] = records[-1]
                     continue
+                if comparison_name(name) in self.names.ambiguous:
+                    raise ValueError("演员别名对应多人")
                 report_progress("portraits", source="gfriends")
                 if self.index is None and self.index_error is None:
                     try:

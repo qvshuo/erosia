@@ -318,7 +318,7 @@ class TaskQueue:
                     finally:
                         progress.reset(token)
                     if self.settings.translation.enabled and not self.translator.available:
-                        report["warnings"] = [*report.get("warnings", []), "翻译未启用：" + self.translator.validation_error]
+                        report["warnings"] = [*report.get("warnings", []), "翻译服务不可用：" + self.translator.validation_error]
                     task_report = retry_task_report(report, repair_stages) if repairing else report
                     outcome = "partial" if task_report.get("partial") else "success" if task_report["status"] in ("found", "unchanged") else "failed"
                     item.update(status=outcome, result=task_report)

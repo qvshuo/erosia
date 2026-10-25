@@ -74,7 +74,7 @@ class Scraper:
                         async with asyncio.timeout(self.settings.source_timeout_seconds):
                             result = await self.sources[source].fetch(request)
                 except TimeoutError:
-                    result = SourceResult(source=source, requested_code=request.code, status=Status.TIMEOUT, message="来源处理超时")
+                    result = SourceResult(source=source, requested_code=request.code, status=Status.TIMEOUT, message="超过来源处理时限")
             result.elapsed_seconds = time.monotonic() - started
             if isinstance(self.client, WebClient):
                 self.client.record_outcome(source, result.status)

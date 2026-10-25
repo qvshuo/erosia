@@ -524,14 +524,15 @@ export function Work({
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">{sources[id]}</span>
                       {state.status !== "missing" && (
-                        <Status status={state.status} />
+                        <Status status={state.status} label={state.label} />
                       )}
                     </div>
                     {(state.phase || state.elapsed !== undefined) && (
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
                         {state.elapsed !== undefined && (
                           <span className="tabular-nums">
-                            用时 {state.elapsed.toFixed(1)} 秒
+                            {state.status === "running" || state.status === "pending" ? "已用" : "用时"}{" "}
+                            {state.elapsed.toFixed(1)} 秒
                           </span>
                         )}
                         {state.phase && <span>{state.phase}</span>}
