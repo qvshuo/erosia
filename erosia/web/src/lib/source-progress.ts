@@ -69,7 +69,7 @@ export function sourceProgress(
     (started
       ? events.at(-1)
       : events.findLast(
-          (item) => item.stage === "wait" && item.message === "等待来源队列",
+          (item) => item.stage === "wait",
         ));
   const status =
     result?.status ??
@@ -115,13 +115,13 @@ export function sourceProgress(
     message = facts.join(" · ") || "未保留来源详情";
   } else if (status === "pending" || status === "running") {
     if (event?.stage === "wait") {
-      if (event.message === "等待来源队列") {
-        label = "排队中";
-        message = "该来源正在处理其他作品";
-      } else if (event.message?.startsWith("等待作品间隔")) {
-        label = "间隔等待";
-        message = "按设置的作品间隔访问";
+      const cooldown = event.message?.match(/^冷却 (\d+) 秒$/);
+      if (cooldown) {
+        const remaining = Math.max(0, Number(cooldown[1]) - Math.floor((now - Date.parse(event.time)) / 1000));
+        label = "冷却中";
+        message = remaining > 0 ? `冷却 ${remaining} 秒` : "等待来源可用";
       } else {
+        label = "等待中";
         message = event.message || "";
       }
     } else {

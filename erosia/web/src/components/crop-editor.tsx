@@ -9,28 +9,19 @@ import {
 } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { cropBox, percentCrop } from "@/lib/crop";
-import type { Box, Crop, WorkDetail } from "@/lib/types";
+import type { Box, Crop, ImageChoice } from "@/lib/types";
 
 export default function CropEditor({
-  detail,
-  file,
-  busy,
-  artwork,
-  close,
-  run,
-  saved,
-  saving,
-  setSaving,
+  code, input, image, applyLabel, coverPreview, busy, close, applied,
 }: {
-  saving: boolean;
-  setSaving: (value: boolean) => void;
-  detail: WorkDetail;
-  file: string;
+  code: string;
+  input: ImageChoice;
+  image: string;
+  applyLabel: "应用裁剪" | "设为封面";
+  coverPreview?: string;
   busy: boolean;
-  artwork: (file: string) => string;
   close: () => void;
-  run: (fn: () => Promise<void>) => void;
-  saved: (detail: WorkDetail) => void;
+  applied: (crop: Crop) => void;
 }) {
   const [result, setResult] = useState<Crop | null>(null);
   const [selection, setSelection] = useState<PercentCrop>();
@@ -39,10 +30,9 @@ export default function CropEditor({
   const [error, setError] = useState("");
   const request = useRef(0);
   const controller = useRef<AbortController | null>(null);
-  const base = `works/${encodeURIComponent(detail.code)}/crop`;
+  const base = `works/${encodeURIComponent(code)}/crop`;
   const preview = useCallback(
     async (body: {
-      file: string;
       center?: boolean;
       box?: Box;
       fingerprint?: string;
@@ -55,7 +45,7 @@ export default function CropEditor({
       setConfirmed(false);
       setError("");
       try {
-        const value = await api<Crop>(base, "POST", body, abort.signal);
+        const value = await api<Crop>(base, "POST", { ...input, ...body }, abort.signal);
         if (abort.signal.aborted || ticket !== request.current) return;
         setResult(value);
         setSelection(percentCrop(value.box, value.width, value.height));
@@ -68,29 +58,30 @@ export default function CropEditor({
           setPending(false);
       }
     },
-    [base],
+    [base, input],
   );
   useEffect(() => {
     setResult(null);
     setSelection(undefined);
-    void preview({ file });
+    setConfirmed(false);
+    setPending(false);
+    setError("");
     return () => {
       controller.current?.abort();
       request.current++;
     };
-  }, [file, preview]);
-  const locked = busy || saving;
+  }, [input]);
+  const locked = busy;
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !saving) close();
+        if (!open) close();
       }}
     >
       <DialogContent
         aria-describedby={undefined}
         className="h-[90dvh] max-h-[90dvh] grid-rows-[auto_auto_minmax(0,1fr)_24px_auto] overflow-hidden sm:max-w-4xl"
-        showCloseButton={!saving}
       >
         <DialogHeader>
           <DialogTitle>调整封面</DialogTitle>
@@ -99,14 +90,14 @@ export default function CropEditor({
           <Button
             variant="outline"
             disabled={locked || pending}
-            onClick={() => void preview({ file })}
+            onClick={() => void preview({})}
           >
             人脸裁剪
           </Button>
           <Button
             variant="outline"
             disabled={locked || pending}
-            onClick={() => void preview({ file, center: true })}
+            onClick={() => void preview({ center: true })}
           >
             居中裁剪
           </Button>
@@ -141,24 +132,23 @@ export default function CropEditor({
               onComplete={(_, percent) => {
                 if (result && !locked)
                   void preview({
-                    file,
                     box: cropBox(percent, result.width, result.height),
                     fingerprint: result.fingerprint,
                   });
               }}
             >
               <img
-                src={artwork(file)}
+                src={image}
                 alt="裁剪原图"
                 className="block max-h-[55dvh] max-w-full object-contain"
                 draggable={false}
               />
             </ReactCrop>
           </div>
-          {result && (
+          {(result || coverPreview) && (
             <div className="space-y-2">
               <img
-                src={result.preview}
+                src={result?.preview ?? coverPreview}
                 className="mx-auto aspect-[2/3] w-32 rounded-md"
                 alt="裁剪预览"
               />
@@ -174,28 +164,13 @@ export default function CropEditor({
         >
           {error || (pending ? "正在生成预览…" : "\u00a0")}
         </p>
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-3">
+          <Button variant="outline" onClick={close}>返回</Button>
           <Button
             disabled={locked || pending || !confirmed || !result || !!error}
-            onClick={() =>
-              run(async () => {
-                if (!result || !confirmed) return;
-                setSaving(true);
-                try {
-                  saved(
-                    await api<WorkDetail>(base, "PUT", {
-                      file,
-                      box: result.box,
-                      fingerprint: result.fingerprint,
-                    }),
-                  );
-                } finally {
-                  setSaving(false);
-                }
-              })
-            }
+            onClick={() => { if (result && confirmed) applied(result); }}
           >
-            {saving ? "保存中" : "保存封面"}
+            {applyLabel}
           </Button>
         </div>
       </DialogContent>

@@ -17,6 +17,8 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost:
           "hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50",
+        "destructive-ghost":
+          "text-destructive hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/20",
         navigation:
           "aria-[current=page]:bg-background aria-[current=page]:text-foreground aria-[current=page]:shadow-sm hover:bg-background/60",
         artwork: "border bg-muted/20 hover:bg-muted/40",
@@ -25,7 +27,7 @@ const buttonVariants = cva(
       size: {
         navigation: "h-[30px] flex-1 px-3",
         poster: "h-60 w-40 overflow-hidden p-0",
-        fanart: "h-60 w-full overflow-hidden p-0",
+        fanart: "h-80 w-full overflow-hidden p-0 sm:h-96",
         sample: "h-28 w-full overflow-hidden p-0 sm:h-32",
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
         xs: "h-6 gap-1 rounded-md px-2 text-xs has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",

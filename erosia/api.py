@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import re
 import sqlite3
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,7 +22,7 @@ from . import __version__
 from .contract import EDITABLE_FIELDS
 from .actors import ActorAliases, library_actors
 from .directories import Directories
-from .images import crop_poster, actor_image, Gfriends, save_image_choices, validate_resources
+from .images import crop_poster, actor_image, Gfriends, save_image_choices, selected_image, validate_resources
 from .models import Metadata, SourceId
 from .nfo import (
     existing_nfo,
@@ -56,7 +58,9 @@ def redact(value: object) -> object:
 
 class CropRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    file: str
+    file: str | None = None
+    source: SourceId | Literal["custom"] | None = None
+    index: int | None = None
     box: tuple[int, int, int, int] | None = None
     center: bool = False
     fingerprint: str | None = None
@@ -252,7 +256,7 @@ def create_app(
                 service.pending_settings = None
                 if service._artwork_client is not None:
                     service._artwork_client.settings = updated
-                service.translator = Translator(updated.translation)
+                service.translator = Translator(updated.translation, actor_aliases_file=updated.actor_aliases_file)
                 app.state.settings = updated
                 await old_translator.close()
             else:
@@ -374,13 +378,16 @@ def create_app(
         fields = set(EDITABLE_FIELDS)
         field_sources = value.pop("field_sources", {})
         image_choices = value.pop("image_choices", {})
-        image_set_source = value.pop("image_set_source", None)
+        sample_source = value.pop("sample_source", None)
+        if sample_source is not None and (not isinstance(sample_source, str) or sample_source not in SourceId):
+            raise HTTPException(422, "剧照来源不可用")
         if not isinstance(field_sources, dict) or set(field_sources) - fields or not isinstance(image_choices, dict) or len(image_choices) > 102:
             raise HTTPException(422, "invalid field or image selection")
         if any(not isinstance(source, str) for source in field_sources.values()) or any(not isinstance(choice, dict) for choice in image_choices.values()):
             raise HTTPException(422, "invalid selection")
-        if any(set(choice) - {"source", "index"} for choice in image_choices.values()):
+        if any(set(choice) - {"source", "index", "file", "box", "fingerprint"} for choice in image_choices.values()):
             raise HTTPException(422, "invalid image selection")
+        image_choices = {role: CropRequest.model_validate(choice).model_dump(exclude_none=True, exclude={"center"}) for role, choice in image_choices.items()}
         if set(value) != fields:
             raise HTTPException(422, "完整填写可编辑字段，番号与系列不可编辑")
         if service.work_running(key):
@@ -396,18 +403,14 @@ def create_app(
                     pass
             selection = service.runtime.selection(key)
             variants = {v["source"]: v for v in service.runtime.variants(key)}
-            if image_set_source:
-                variant = variants.get(image_set_source)
+            if sample_source:
+                variant = variants.get(sample_source)
                 items = (variant.get("metadata") or {}).get("artwork", []) if variant and variant.get("status") == "found" else []
-                if not items:
-                    raise HTTPException(422, "图片来源不可用")
-                image_choices = {role: choice for role, choice in image_choices.items() if role == "poster"}
-                cover = next((i for i, item in enumerate(items) if item["role"] != "sample"), None)
-                if cover is not None:
-                    image_choices["poster"] = {"source": image_set_source, "index": cover}
-                    image_choices["fanart"] = {"source": image_set_source, "index": cover}
-                for i, index in enumerate([i for i, item in enumerate(items) if item["role"] == "sample"][:100]):
-                    image_choices[f"fanart{i+1}"] = {"source": image_set_source, "index": index}
+                indexes = [i for i, item in enumerate(items) if item["role"] == "sample"][:100]
+                if not indexes:
+                    raise HTTPException(422, "剧照来源不可用")
+                image_choices = {role: choice for role, choice in image_choices.items() if not re.fullmatch(r"fanart[1-9][0-9]{0,2}", role)}
+                image_choices.update({f"fanart{i+1}": {"source": sample_source, "index": index} for i, index in enumerate(indexes)})
             metadata = Metadata.model_validate({"code": key, "source_url": "", "series": previous.get("series"), **value})
             if not metadata.title.strip():
                 raise HTTPException(422, "title must not be empty")
@@ -448,14 +451,12 @@ def create_app(
                 if image_choices:
                     try:
                         records = await save_image_choices(await service.artwork_client(), image_choices, variants,
-                            folder, media_stems(work), replace_set=bool(image_set_source))
+                            folder, media_stems(work), replace_samples=bool(sample_source))
                     except (FetchError, ValueError, OSError) as exc:
                         raise HTTPException(502, "图片保存失败，保留旧图：" + str(exc)) from exc
-                    if image_set_source:
-                        selection["image_choices"] = {}
-                        selection["image_source"] = image_set_source
-                    selection["image_choices"] = {**selection.get("image_choices", {}), **image_choices}
-                    selection.pop("pending_images", None)
+                    if sample_source:
+                        selection["image_choices"] = {role: choice for role, choice in selection.get("image_choices", {}).items() if not re.fullmatch(r"fanart[1-9][0-9]{0,2}", role)}
+                    selection["image_choices"] = {**selection.get("image_choices", {}), **{role: {"source": "custom"} if choice.get("box") is not None or choice.get("file") else choice for role, choice in image_choices.items()}}
                 write_nfo_files(service.output, work, serialize_nfo(metadata))
                 selection.update(field_sources=provenance,
                     translated_fields=sorted(translated), original_fields=originals, translation_fingerprints=fingerprints)
@@ -463,8 +464,23 @@ def create_app(
                 report.pop("error", None)
                 report["stages"] = {**report.get("stages", {}), "metadata": "success"}
                 if image_choices:
-                    report["images"] = records
-                    report["stages"]["images"] = "success"
+                    replaced = set(image_choices)
+                    if sample_source:
+                        replaced.update(f"fanart{i}" for i in range(1, 101))
+                    def replaced_image(record):
+                        name = record.get("file", "")
+                        return name in replaced or any(Path(name).stem == f"{stem}-{role}"
+                            for stem in media_stems(work) for role in replaced)
+                    report["images"] = [record for record in report.get("images", []) if not replaced_image(record)] + records
+                    pending_images = selection.get("pending_images")
+                    if any(record.get("status") == "error" for record in report["images"]):
+                        report["stages"]["images"] = "failed"
+                    elif not pending_images or report["stages"].get("images") not in ("pending", "cancelled"):
+                        report["stages"]["images"] = "success"
+                        selection.pop("pending_images", None)
+                    if selection.get("pending_images"):
+                        # A later repair must not overwrite groups explicitly selected in this save.
+                        pending_images["protected_roles"] = sorted(set(pending_images.get("protected_roles", [])) | replaced)
                 report["translation_errors"] = list(errors.values())
                 report["stages"]["translation"] = "failed" if errors else "success"
                 service.runtime.record_result(key, complete_report(report), selection=selection)
@@ -510,64 +526,26 @@ def create_app(
         return FileResponse(path, headers={"Cache-Control": "no-store"})
 
     async def cropped_image(service, key, request):
-        work, path = artwork_file(service, key, request.file)
-        if path.stat().st_size > 32 * 1024 * 1024:
-            raise ValueError("artwork exceeds 32 MiB")
-        data = path.read_bytes()
+        work = service.runtime.work(key)
+        choice = request.model_dump(exclude_none=True, exclude={"box", "center"})
+        if request.file:
+            artwork_file(service, key, request.file)
+            choice["source"] = "custom"
+        variants = {v["source"]: v for v in service.runtime.variants(key)}
+        image = await selected_image(await service.artwork_client(), choice, variants, target_folder(service.output, key), media_stems(work))
+        data = image.content
         fingerprint = hashlib.sha256(data).hexdigest()
-        if request.fingerprint and request.fingerprint != fingerprint:
-            raise HTTPException(409, "source image changed; preview again")
         result = await asyncio.to_thread(crop_poster, data, request.box, request.center)
-        return work, data, fingerprint, result
+        return fingerprint, result
 
     @app.post("/api/works/{key}/crop")
     async def preview_crop(key: str, request: CropRequest):
-        _, _, fingerprint, result = await cropped_image(runner(), key, request)
+        fingerprint, result = await cropped_image(runner(), key, request)
         return {
             **{name: result[name] for name in ("box", "faces", "width", "height")},
             "fingerprint": fingerprint,
             "preview": "data:image/png;base64," + base64.b64encode(result["preview"]).decode(),
         }
-
-    @app.put("/api/works/{key}/crop")
-    async def save_crop(key: str, request: CropRequest):
-        if request.box is None or not request.fingerprint:
-            raise HTTPException(422, "crop preview required before saving")
-        service = runner()
-        if service.work_running(key):
-            raise ValueError("该作品正在刮削")
-        async with service.task_lock, service.work_lock(key):
-            work, data, _, result = await cropped_image(service, key, request)
-            if service.work_running(key):
-                raise ValueError("该作品正在刮削")
-            folder = target_folder(service.output, key)
-            with file_transaction(folder):
-                for stem in media_stems(work):
-                    # Fanart keeps the original if this work only had a poster.
-                    if not any(p.stem == stem + "-fanart" for p in folder.iterdir()):
-                        atomic_write(folder / (stem + "-fanart" + Path(request.file).suffix), data)
-                    poster = folder / (stem + "-poster" + result["extension"])
-                    atomic_write(poster, result["content"])
-                    for old in list(folder.iterdir()):
-                        if old.stem == stem + "-poster" and old != poster and image_file(work, old):
-                            old.unlink()
-                report = {**service.runtime.results.get(key, {})}
-                if report:
-                    report["images"] = [
-                        item
-                        for item in report.get("images", [])
-                        if not (item.get("status") == "error" and item.get("file") == "poster")
-                    ]
-                    if not any(item.get("status") == "error" for item in report["images"]):
-                        report.setdefault("stages", {})["images"] = "success"
-                selection = service.runtime.selection(key)
-                selection["image_choices"] = {**selection.get("image_choices", {}), "poster": {"source": "custom"}}
-                if report:
-                    service.runtime.record_result(key, complete_report(report), selection=selection)
-                else:
-                    service.runtime.save_selection(key, selection)
-        service.refresh_work(key)
-        return await work_details(str(work.path))
 
     @app.post("/api/tasks")
     async def create_task(request: TaskRequest):

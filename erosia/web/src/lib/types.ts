@@ -176,4 +176,7 @@ export interface LibraryActor {
 export interface ImageChoice {
   source: string;
   index?: number;
+  file?: string;
+  box?: Box;
+  fingerprint?: string;
 }

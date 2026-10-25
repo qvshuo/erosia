@@ -24,7 +24,7 @@ import {
 } from "./shared";
 
 const groups: Record<string, string[]> = {
-  todo: ["pending", "failed", "partial", "invalid_key", "conflict"],
+  todo: ["queued", "pending", "failed", "partial", "invalid_key", "conflict"],
   done: ["scraped"],
   running: ["running"],
 };

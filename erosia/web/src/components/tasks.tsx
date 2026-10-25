@@ -396,7 +396,7 @@ export function Tasks({
                     {action(task)}
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="destructive-ghost"
                       disabled={pending || active(task)}
                       onClick={() => run(() => mutate(task, "delete"))}
                     >

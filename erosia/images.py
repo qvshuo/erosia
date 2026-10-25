@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -446,31 +447,53 @@ class Gfriends:
         return records
 
 
-async def save_image_choices(client, choices, variants, target, stems, *, replace_set=False):
-    """Validate all chosen images before replacing any current image."""
-    staged, downloaded = [], {}
-    for role, choice in choices.items():
-        if not re.fullmatch(r"poster|fanart(?:[1-9][0-9]{0,2})?", role):
-            raise ValueError("invalid artwork role")
+async def selected_image(client, choice, variants, target, stems):
+    """Resolve saved artwork or a source candidate without writing any files."""
+    file = choice.get("file")
+    if file is not None:
+        path = target / file if isinstance(file, str) else target
+        if (not isinstance(file, str) or Path(file).name != file or choice.get("source") != "custom"
+            or choice.get("index") is not None or not path.is_file() or path.is_symlink()
+            or not any(re.fullmatch(re.escape(stem) + r"-(?:poster|fanart(?:[1-9][0-9]{0,2})?)", path.stem) for stem in stems)):
+            raise ValueError("图片文件不可用")
+        if path.stat().st_size > 32 * 1024 * 1024:
+            raise ValueError("artwork exceeds 32 MiB")
+        image = validate_image(path.read_bytes())
+    else:
         source = choice.get("source")
-        if not isinstance(source, str):
-            raise ValueError("invalid image source")
         variant = variants.get(source)
         if not variant or variant.get("status") != "found":
             raise ValueError("图片来源不可用")
         items = (variant.get("metadata") or {}).get("artwork", [])
         index = choice.get("index")
-        if not isinstance(index, int) or not 0 <= index < len(items):
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(items):
             raise ValueError("图片候选不可用")
         item = items[index]
         if placeholder_url(source, item["url"]):
             raise ValueError("来源返回占位图")
-        identity = (source, item["url"], item["referer"])
+        image = validate_image(await client.image_bytes(SourceId(source), item["url"], item["referer"]), SourceId(source))
+    if choice.get("fingerprint") and hashlib.sha256(image.content).hexdigest() != choice["fingerprint"]:
+        raise ValueError("source image changed; preview again")
+    return image
+
+
+async def save_image_choices(client, choices, variants, target, stems, *, replace_samples=False):
+    """Validate all chosen images before replacing any current image."""
+    staged, downloaded = [], {}
+    for role, choice in choices.items():
+        if not re.fullmatch(r"poster|fanart(?:[1-9][0-9]{0,2})?", role):
+            raise ValueError("invalid artwork role")
+        identity = (choice.get("file"), choice.get("source"), choice.get("index"))
         if identity not in downloaded:
-            downloaded[identity] = validate_image(await client.image_bytes(SourceId(source), item["url"], item["referer"]), SourceId(source))
+            downloaded[identity] = await selected_image(client, choice, variants, target, stems)
         image = downloaded[identity]
+        if choice.get("fingerprint") and hashlib.sha256(image.content).hexdigest() != choice["fingerprint"]:
+            raise ValueError("source image changed; preview again")
+        box = choice.get("box")
+        if box is not None and (role != "poster" or not choice.get("fingerprint")):
+            raise ValueError("invalid crop selection")
         if role == "poster":
-            image = validate_image((await asyncio.to_thread(crop_poster, image.content))["content"])
+            image = validate_image((await asyncio.to_thread(crop_poster, image.content, tuple(box) if box is not None else None))["content"])
         extension = ".jpg" if image.format == "jpeg" else "." + image.format
         staged.append((role, extension, image.content))
     records = []
@@ -484,11 +507,11 @@ async def save_image_choices(client, choices, variants, target, stems, *, replac
                     if old.stem == base and old.name != name and old.suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"} and old.is_file() and not old.is_symlink():
                         old.unlink()
                 records.append({"file": name, "status": "saved"})
-        if replace_set:
+        if replace_samples:
             written = {record["file"] for record in records}
             for old in target.iterdir():
                 if (old.name not in written and old.is_file() and not old.is_symlink()
                     and old.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-                    and any(old.stem.startswith(stem + "-") for stem in stems)):
+                    and any(re.fullmatch(re.escape(stem) + r"-fanart[1-9][0-9]{0,2}", old.stem) for stem in stems)):
                     old.unlink()
     return records

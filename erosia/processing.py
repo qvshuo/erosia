@@ -72,7 +72,7 @@ async def write_artwork(client, work, output, request, selection):
             if Path(name).stem.startswith(stem + "-"):
                 image_choices.setdefault(Path(name).stem[len(stem) + 1:],
                                          {"source": selection.get("image_source", "unknown")})
-    protected = {role for role, choice in image_choices.items()
+    protected = set(request.get("protected_roles", [])) | {role for role, choice in image_choices.items()
                  if choice.get("source") == "custom" and not request["overwrite_custom"]}
     previous = [name for name in previous if not any(
         Path(name).stem == f"{stem}-{role}" for stem in media_stems(work) for role in protected)]
@@ -91,7 +91,7 @@ async def write_artwork(client, work, output, request, selection):
     else:
         if request["overwrite_custom"]:
             selection["image_choices"] = {role: choice for role, choice in image_choices.items()
-                                          if choice.get("source") != "custom"}
+                                          if choice.get("source") != "custom" or role in request.get("protected_roles", [])}
         selection["image_source"] = request["source"]
         selection.pop("pending_images", None)
     return records

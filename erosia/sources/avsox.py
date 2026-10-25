@@ -8,6 +8,7 @@ from ..http import FetchError, Page
 from ..models import (
     Actor,
     Candidate,
+    Category,
     Metadata,
     ScrapeRequest,
     SourceId,
@@ -23,6 +24,8 @@ class AVSOX(Source):
     default_url = "https://avsox.click"
 
     async def _fetch(self, request: ScrapeRequest) -> SourceResult:
+        if self.rules.classify(request.code).category == Category.CENSORED:
+            raise FetchError(Status.UNSUPPORTED, "AVSOX only supports uncensored catalogs")
         if request.source_url:
             url = self.checked_url(request.source_url)
         elif request.external_id:

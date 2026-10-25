@@ -237,6 +237,13 @@ class WebClient:
         finally:
             self._work_scope.reset(token)
 
+    def source_wait_seconds(self, source: SourceId) -> int:
+        previous = self._metadata_last.get(f"source:{source}")
+        interval = self.settings.source_interval(source)
+        remaining = interval - (time.monotonic() - previous) if previous is not None else 0
+        cooldown = self.cooldowns.get(str(source), {}).get("cooldown_until", 0) - time.time()
+        return max(0, ceil(max(remaining, cooldown)))
+
     async def _throttle(self, source: SourceId, host: str, binary: bool = False) -> None:
         interval = 1 if binary else self.settings.source_interval(source)
         key = f"image:{host}" if binary else f"source:{source}"
@@ -244,7 +251,7 @@ class WebClient:
         previous = history.get(key)
         delay = interval - (time.monotonic() - previous) if previous is not None else 0
         if delay > 0:
-            report_progress("wait", source=source, message=f"等待{'图片' if binary else '作品'}间隔 {ceil(delay)} 秒")
+            report_progress("wait", source=source, message=f"{'图片间隔' if binary else '冷却'} {ceil(delay)} 秒")
             await asyncio.sleep(delay)
         history[key] = time.monotonic()
 

@@ -1,6 +1,6 @@
 """JAV metadata for Emby."""
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 from .engine import Scraper
 from .models import ScrapeRequest, ScrapeResult

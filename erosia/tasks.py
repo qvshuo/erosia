@@ -75,7 +75,7 @@ class TaskQueue:
         self.pending_settings = None
         self.on_idle = None
         self.scraper_factory = scraper_factory
-        self.translator = Translator(settings.translation)
+        self.translator = Translator(settings.translation, actor_aliases_file=settings.actor_aliases_file)
         self._artwork_client = None
         self._artwork_lock = asyncio.Lock()
         self.closed = False
@@ -110,7 +110,7 @@ class TaskQueue:
             rows = await asyncio.to_thread(self._scan_rows, updated, self.runtime.results, set(), False)
             self.runtime.save_scan(rows)
         self.settings = updated
-        self.translator = Translator(updated.translation)
+        self.translator = Translator(updated.translation, actor_aliases_file=updated.actor_aliases_file)
         if self._artwork_client is not None:
             self._artwork_client.settings = updated
         self.pending_settings = None
@@ -147,7 +147,12 @@ class TaskQueue:
 
     def refresh_work(self, code):
         work = self.runtime.work(code)
+        queued = work.status == "queued"
         self._apply_result(work, self.runtime.results.get(code, {}))
+        if queued and any(item["code"] == code and item["status"] == "pending"
+                          for task in self.runtime.task_data.values()
+                          if task["status"] in ("pending", "running") for item in task["items"]):
+            work.status = "queued"
         self.runtime.update_work(work)
 
     async def scan_async(self, *, settings=None, persist=True):
@@ -211,7 +216,12 @@ class TaskQueue:
                 {"code": key, "status": "pending", "attempts": 0, "result": None} for key in keys
             ],
         }
+        queued = {"stage": "wait", "status": "pending", "source": None, "message": "任务已排队", "time": now()}
+        for item in task["items"]:
+            item.update(stage=dict(queued), events=[dict(queued)])
         self.runtime.save_task(task)
+        for item in task["items"]:
+            self.runtime.work_row(item["code"])["status"] = "queued"
         worker = asyncio.create_task(self.run(ident))
         self.running[ident] = worker
         worker.add_done_callback(lambda _: self.running.pop(ident, None))
@@ -301,7 +311,10 @@ class TaskQueue:
                     self.runtime.save_task(task, item)
 
                     def update_progress(event):
-                        item["events"] = [*item.get("events", []), event][-60:]
+                        events = item.get("events", [])
+                        if event["stage"] == "wait" and event.get("source"):
+                            events = [old for old in events if not (old["stage"] == "wait" and old.get("source") == event["source"])]
+                        item["events"] = [*events, event][-60:]
                         item["stage"] = event
                         task["current"] = {"code": item["code"], **event}
                         self.runtime.save_task(task, item)

@@ -71,6 +71,7 @@ export const categories: Record<string, string> = {
 };
 export const statuses: Record<string, string> = {
   pending: "等待中",
+  queued: "等待中",
   partial: "部分完成",
   missing: "尚未刮削",
   cooldown: "冷却中",

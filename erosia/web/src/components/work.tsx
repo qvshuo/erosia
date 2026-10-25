@@ -1,5 +1,4 @@
 import {
-  Fragment,
   lazy,
   Suspense,
   useEffect,
@@ -18,7 +17,7 @@ import {
   type Draft,
   type FieldKey,
 } from "@/lib/metadata";
-import type { ImageChoice, Variant, WorkDetail, Work as WorkRecord } from "@/lib/types";
+import type { Crop, ImageChoice, Variant, WorkDetail, Work as WorkRecord } from "@/lib/types";
 import {
   Empty,
   Select,
@@ -35,7 +34,8 @@ type Editor = {
   draft: Draft;
   fieldSources: Record<string, string>;
   images: Record<string, ImageChoice>;
-  imageSetSource?: string;
+  sampleSource?: string;
+  posterPreview?: string;
 };
 export function Work({
   path,
@@ -58,13 +58,13 @@ export function Work({
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pending, setPending] = useState<"save" | "prepare" | null>(null);
-  const [cropFile, setCropFile] = useState<string | null>(null);
+  const [cropImage, setCropImage] = useState<{ role: string; choice: ImageChoice; url: string; coverPreview?: string } | null>(null);
   const [mode, setMode] = useState("fill_missing");
   const changed =
     !!editor &&
     (Object.keys(editor.fieldSources).length > 0 ||
       Object.keys(editor.images).length > 0 ||
-      !!editor.imageSetSource ||
+      !!editor.sampleSource ||
       JSON.stringify(editor.draft) !==
         JSON.stringify(metadataDraft(editor.detail)));
   function accept(detail: WorkDetail) {
@@ -76,7 +76,7 @@ export function Work({
     });
   }
   const receive = useEffectEvent((detail: WorkDetail) => {
-    if (!changed && !pending && !cropFile) accept(detail);
+    if (!changed && !pending && !cropImage) accept(detail);
     else
       setEditor((current) =>
         current
@@ -117,8 +117,8 @@ export function Work({
   const base = `works/${encodeURIComponent(detail.code)}`;
   const updatedAt = detail.process?.events?.at(-1)?.time;
   const locked = !!pending || !detail.editable;
-  const scrapeLocked =
-    locked || ["pending", "running"].includes(detail.process?.status ?? "");
+  const processActive = ["pending", "running"].includes(detail.process?.status ?? "");
+  const scrapeLocked = locked || processActive || detail.status === "queued";
   const variants = detail.variants ?? [];
   const route = detail.route_sources ?? variants.map((v) => v.source);
   const artwork = (file: string) =>
@@ -190,8 +190,8 @@ export function Work({
     const result = await api<WorkDetail>(`${base}/metadata`, "PUT", {
         ...metadataForm(draft),
         field_sources: editor!.fieldSources,
-        ...(editor!.imageSetSource
-          ? { image_set_source: editor!.imageSetSource }
+        ...(editor!.sampleSource
+          ? { sample_source: editor!.sampleSource }
           : {}),
         image_choices: editor!.images,
       });
@@ -203,57 +203,74 @@ export function Work({
       .map((file) => [file.match(/-(poster|fanart\d*)\.[^.]+$/)?.[1], file])
       .filter(([role]) => role),
   );
-  const imageRoles = [
-    ...new Set([
-      "poster",
-      ...(editor.imageSetSource ? [] : ["fanart", ...Object.keys(imageFiles)]),
-      ...Object.keys(editor.images),
-    ]),
+  const imageRoles = [...new Set([
+    ...Object.keys(imageFiles).filter((role) => !editor.sampleSource || !/^fanart\d+$/.test(role)),
+    ...Object.keys(editor.images),
+  ])];
+  const imageGroups = [
+    { key: "poster", label: "封面", roles: imageRoles.filter((role) => role === "poster") },
+    { key: "fanart", label: "封面原图", roles: imageRoles.filter((role) => role === "fanart") },
+    { key: "samples", label: "剧照", roles: imageRoles.filter((role) => /^fanart\d+$/.test(role)).sort((a, b) => Number(a.slice(6)) - Number(b.slice(6))) },
   ];
-  const savedImageSources = new Set(
-    Object.keys(imageFiles).map(
-      (role) =>
-        detail.selection?.image_choices?.[role]?.source ??
-        detail.selection?.image_source ??
-        "unknown",
-    ),
-  );
-  const currentImageSource =
-    editor.imageSetSource ??
-    (savedImageSources.size > 1
-      ? "mixed"
-      : ([...savedImageSources][0] ?? "unknown"));
-  function chooseImageSet(source: string) {
-    const variant = variants.find((v) => v.source === source);
-    if (!variant?.metadata?.artwork) return;
-    const items = variant.metadata.artwork;
-    const images: Record<string, ImageChoice> = {};
-    const cover = items.findIndex((item) => item.role !== "sample");
-    if (cover >= 0) {
-      images.poster = { source, index: cover };
-      images.fanart = { source, index: cover };
+  function groupSource(group: (typeof imageGroups)[number]) {
+    if (group.key === "samples" && editor!.sampleSource) return editor!.sampleSource;
+    if (group.key === "poster" && editor!.posterPreview) return "custom";
+    const values = new Set(group.roles.map((role) => editor!.images[role]?.source ??
+      detail.selection?.image_choices?.[role]?.source ?? detail.selection?.image_source ?? "unknown"));
+    return values.size > 1 ? "mixed" : ([...values][0] ?? "unknown");
+  }
+  function chooseImageSource(group: string, source: string) {
+    const items = variants.find((v) => v.source === source)?.metadata?.artwork;
+    if (!items) return;
+    const images = { ...editor!.images };
+    if (group === "samples") {
+      for (const role of Object.keys(images)) if (/^fanart\d+$/.test(role)) delete images[role];
+      items.map((item, index) => ({ item, index })).filter(({ item }) => item.role === "sample")
+        .slice(0, 100).forEach(({ index }, i) => { images[`fanart${i + 1}`] = { source, index }; });
+    } else {
+      const index = items.findIndex((item) => item.role !== "sample");
+      if (index < 0) return;
+      images[group] = { source, index };
     }
-    items
-      .map((item, index) => ({ item, index }))
-      .filter(({ item }) => item.role === "sample")
-      .slice(0, 100)
-      .forEach(({ index }, i) => {
-        images[`fanart${i + 1}`] = { source, index };
-      });
-    setEditor({ ...editor!, images, imageSetSource: source });
+    setEditor({
+      ...editor!, images,
+      sampleSource: group === "samples" ? source : editor!.sampleSource,
+      posterPreview: group === "poster" ? undefined : editor!.posterPreview,
+    });
   }
   function imageLabel(role: string) {
     return role === "poster"
-      ? "Emby 封面"
+      ? "封面"
       : role === "fanart"
-        ? "封套原图"
+        ? "封面原图"
         : `剧照 ${role.slice(6)}`;
   }
+  function imageUrl(choice: ImageChoice, poster = false) {
+    if (choice.file) return artwork(choice.file);
+    return `/api/${base}/variants/${choice.source}/artwork?index=${choice.index}&poster=${poster}`;
+  }
   function preview(role: string) {
+    if (role === "poster" && editor!.posterPreview) return editor!.posterPreview;
     const choice = editor!.images[role];
-    if (choice && choice.index !== undefined)
-      return `/api/${base}/variants/${choice.source}/artwork?index=${choice.index}&poster=${role === "poster"}`;
+    if (choice) return imageUrl(choice, role === "poster");
     return imageFiles[role] ? artwork(imageFiles[role]!) : null;
+  }
+  function openCrop(role: string) {
+    const choice = editor!.images[role] ?? (imageFiles[role] ? { source: "custom", file: imageFiles[role] } : null);
+    if (!choice) return;
+    const { box: _, fingerprint: __, ...input } = choice;
+    setCropImage({ role, choice: input, url: imageUrl(input), coverPreview: preview("poster") ?? undefined });
+  }
+  function applyCrop(choice: ImageChoice, crop: Crop) {
+    setEditor((current) => current ? {
+      ...current,
+      images: {
+        ...current.images,
+        poster: { ...choice, box: crop.box, fingerprint: crop.fingerprint },
+      },
+      posterPreview: crop.preview,
+    } : current);
+    setCropImage(null);
   }
   const renderField = ([key, label, type]: (typeof fields)[number]) => {
     const source = sourceOf(key);
@@ -348,11 +365,11 @@ export function Work({
           <h2 className="text-xl font-semibold">{detail.code}</h2>
           <Status
             status={
-              detail.process?.status === "pending" ||
-              detail.process?.status === "running"
-                ? detail.process.status
+              processActive
+                ? detail.process!.status
                 : detail.status
             }
+            label={!processActive && detail.status === "pending" ? "未刮削" : undefined}
           />
           {updatedAt && (
             <time
@@ -392,85 +409,46 @@ export function Work({
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="min-w-0 space-y-6">
             <fieldset disabled={locked}>{renderField(fields[0])}</fieldset>
-            <section aria-label="作品图片" className="min-w-0 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-medium">封面</h3>
-                <Select
-                  label="图片来源"
-                  value={currentImageSource}
-                  disabled={locked}
-                  onChange={chooseImageSet}
-                  options={{
-                    [currentImageSource]:
-                      sources[currentImageSource] ??
-                      (currentImageSource === "mixed"
-                        ? "混合来源"
-                        : "来源未知"),
-                    ...Object.fromEntries(
-                      variants
-                        .filter(
-                          (v) =>
-                            v.status === "found" && v.metadata?.artwork?.length,
-                        )
-                        .map((v) => [
-                          v.source,
-                          `${sources[v.source]} · ${v.metadata!.artwork!.filter((a) => a.role === "sample").length} 张剧照`,
-                        ]),
-                    ),
-                  }}
-                />
-              </div>
-              <div className="grid grid-cols-2 items-start gap-4 sm:grid-cols-4">
-                {imageRoles.map((role) => {
-                  const image = preview(role);
-                  return (
-                    <Fragment key={role}>
-                      {role ===
-                        imageRoles.find((item) => /^fanart\d+$/.test(item)) && (
-                        <h3 className="col-span-full text-sm font-medium">
-                          剧照
-                        </h3>
-                      )}
-                      <div
-                        className={`min-w-0 space-y-2 ${role === "poster" ? "col-span-full sm:col-span-1" : role === "fanart" ? "col-span-full sm:col-span-3" : ""}`}
-                      >
-                        {image ? (
+            <section aria-label="作品图片" className="min-w-0 space-y-6">
+              {imageGroups.map((group) => {
+                const current = groupSource(group);
+                const available = variants.filter((variant) => variant.status === "found" &&
+                  variant.metadata?.artwork?.some((item) => group.key === "samples" ? item.role === "sample" : item.role !== "sample"));
+                return (
+                  <section key={group.key} aria-label={group.label} className="min-w-0 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-medium">{group.label}</h3>
+                      <Select
+                        label={`${group.label}来源`}
+                        value={current}
+                        disabled={locked || !available.length}
+                        onChange={(source) => chooseImageSource(group.key, source)}
+                        options={{
+                          [current]: sources[current] ?? (current === "custom" ? "自定义" : current === "mixed" ? "混合来源" : "来源未知"),
+                          ...Object.fromEntries(available.map((variant) => [variant.source, sources[variant.source]!])),
+                        }}
+                      />
+                    </div>
+                    <div className={group.key === "samples" ? "grid grid-cols-2 gap-4 sm:grid-cols-4" : "min-w-0"}>
+                      {group.roles.map((role) => {
+                        const image = preview(role);
+                        return image ? (
                           <Button
+                            key={role}
                             type="button"
                             variant="artwork"
-                            size={
-                              role === "poster"
-                                ? "poster"
-                                : role === "fanart"
-                                  ? "fanart"
-                                  : "sample"
-                            }
-
-                            aria-label={`裁剪${imageLabel(role)}图片`}
-                            disabled={locked || changed || !imageFiles[role]}
-                            onClick={() =>
-                              setCropFile(
-                                role === "poster"
-                                  ? (imageFiles.fanart ?? imageFiles[role]!)
-                                  : imageFiles[role]!,
-                              )
-                            }
+                            size={role === "poster" ? "poster" : role === "fanart" ? "fanart" : "sample"}
+                            aria-label={`调整${imageLabel(role)}`}
+                            onClick={() => openCrop(role)}
                           >
-                            <img
-                              src={image}
-                              alt={imageLabel(role)}
-                              className="h-auto w-auto max-h-full max-w-full object-contain"
-                              loading="lazy"
-                            />
+                            <img src={image} alt={imageLabel(role)} className="h-auto w-auto max-h-full max-w-full object-contain" loading="lazy" />
                           </Button>
-                        ) : (
-                          <Empty>暂无{imageLabel(role)}</Empty>
-                        )}
-                      </div>
-                    </Fragment>
-                  );
-                })}
-              </div>
+                        ) : null;
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
             </section>
             <section aria-label="作品元数据" className="min-w-0 space-y-4">
               {detail.metadata_error && (
@@ -568,22 +546,17 @@ export function Work({
           </Button>
         </StickyActions>
       </form>
-      {cropFile && (
+      {cropImage && (
         <Suspense fallback={<Empty>正在载入裁剪…</Empty>}>
           <CropEditor
-            detail={detail}
-            file={cropFile}
+            code={detail.code}
+            input={cropImage.choice}
+            applyLabel={cropImage.role === "poster" || cropImage.role === "fanart" ? "应用裁剪" : "设为封面"}
+            image={cropImage.url}
+            coverPreview={cropImage.coverPreview}
             busy={locked}
-            saving={!!pending}
-            setSaving={(saving) => setPending(saving ? "save" : null)}
-            artwork={artwork}
-            close={() => setCropFile(null)}
-            run={run}
-            saved={(value) => {
-              accept(value);
-              setCropFile(null);
-              saved(value);
-            }}
+            close={() => setCropImage(null)}
+            applied={(crop) => applyCrop(cropImage.choice, crop)}
           />
         </Suspense>
       )}

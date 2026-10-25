@@ -154,7 +154,6 @@ class Settings(BaseModel):
                 SourceId.JAVBUS,
                 SourceId.AVBASE,
                 SourceId.AIRAV,
-                SourceId.AVSOX,
             ],
             "uncensored": [
                 SourceId.ONEPONDO,
@@ -194,6 +193,7 @@ class Settings(BaseModel):
             raise ValueError("routes must contain exactly the four catalog categories")
         if any(site != SourceId.JAVDB and settings.cookie for site, settings in self.sites.items()):
             raise ValueError("only JavDB supports a configured Cookie")
+        self.routes["censored"] = [source for source in self.routes["censored"] if source != SourceId.AVSOX]
         for name in ("censored", "uncensored", "fc2", "unknown"):
             route = self.routes.get(name, [])
             if not route or len(set(route)) != len(route):
