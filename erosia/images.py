@@ -189,9 +189,10 @@ def crop_box(width: int, height: int, faces: list[list[float]]) -> tuple[int, in
     if faces:
 
         def score(face):
-            _, _, fw, fh, confidence = face
-            # Cover spreads place the main portrait off-center; position is not face quality.
-            return fw * fh * confidence**2
+            fx, _, fw, fh, confidence = face
+            # Landscape covers usually place the main portrait on the right.
+            weight = 2.75 if width > height and fx + fw / 2 >= width / 2 else 1
+            return fw * fh * confidence**2 * weight
 
         fx, fy, fw, fh, _ = max(faces, key=score)
         x, y = fx + fw / 2 - w / 2, fy - h * 0.15
