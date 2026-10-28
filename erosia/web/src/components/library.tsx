@@ -121,8 +121,8 @@ export function Library({
           刮削元数据
         </Button>
         <div className="ml-auto flex items-center gap-3">
-          <span aria-live="polite" className="text-sm text-muted-foreground">
-            {scanned ? "扫描完成" : ""}
+          <span role="status" className="text-sm text-muted-foreground">
+            {pending ? "正在处理，请稍候" : scanned ? "扫描完成" : ""}
           </span>
           <Button
             variant="outline"
@@ -141,6 +141,7 @@ export function Library({
           </Button>
         </div>
       </div>
+      {busy && <p className="text-sm text-muted-foreground">任务进行中，暂不能批量刮削或扫描</p>}
       <div className="overflow-hidden rounded-lg border">
         <div className="flex flex-wrap items-center gap-3 border-b p-4">
           <SearchInput
@@ -223,7 +224,9 @@ export function Library({
                     }
                   />
                 </TableCell>
-                <TableCell className="font-medium">{work.code}</TableCell>
+                <TableCell className="font-medium">{work.code}
+                  {work.warnings.length > 0 && <p className="mt-1 whitespace-normal text-xs font-normal text-muted-foreground">{work.warnings.join("；")}</p>}
+                </TableCell>
                 <TableCell>
                   <WorkTitle title={work.title} />
                 </TableCell>
@@ -241,7 +244,7 @@ export function Library({
             ))}
           </TableBody>
         </Table>
-        {!rows.length && <Empty />}
+        {!rows.length && <Empty>{query || filter !== "all" ? "没有匹配的作品" : configured ? "暂无作品，点击扫描作品" : "暂无作品"}</Empty>}
         <Pagination
           page={current}
           pages={pages}

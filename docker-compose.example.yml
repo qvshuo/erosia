@@ -1,6 +1,6 @@
 services:
   erosia:
-    image: erosia:1.2.0
+    image: erosia:1.2.1
     build: .
     restart: unless-stopped
     ports:

@@ -2,6 +2,7 @@ import {
   useEffect,
   useState,
   type ReactNode,
+  type ComponentProps,
   type MouseEvent,
   type KeyboardEvent,
 } from "react";
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import {
   Dialog,
+  DialogTrigger,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -25,6 +27,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { statuses } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 export function SummaryHeader({
   count,
@@ -193,6 +196,24 @@ export function Pagination({
     </div>
   );
 }
+export function TranslationOriginal({ label, text }: { label: string; text?: string }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild><Button type="button" variant="ghost" size="xs" aria-label={`查看${label}原文`}>译</Button></DialogTrigger>
+      <DialogContent aria-describedby={undefined} className="max-h-[85dvh] overflow-y-auto">
+        <DialogHeader><DialogTitle>{label}原文</DialogTitle></DialogHeader>
+        <p className="whitespace-pre-wrap break-words text-sm">{text ?? "未保留原文"}</p>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function ArtworkImage({ src, alt, className, ...props }: ComponentProps<"img">) {
+  const [failed, setFailed] = useState<string>();
+  if (src && failed === src) return <span role="img" aria-label={`${alt ?? "图片"}加载失败`} title="图片加载失败，请刷新重试" className={cn("inline-flex items-center justify-center whitespace-normal bg-muted p-2 text-xs text-destructive", className)}>加载失败</span>;
+  return <img {...props} className={className} src={src} alt={alt} onError={(event) => { setFailed(typeof src === "string" ? src : undefined); props.onError?.(event); }} />;
+}
+
 export function Empty({ children = "暂无记录" }: { children?: ReactNode }) {
   return (
     <p className="p-12 text-center text-sm text-muted-foreground">{children}</p>

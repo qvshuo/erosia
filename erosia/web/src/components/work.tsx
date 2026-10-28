@@ -9,6 +9,7 @@ import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { errorText } from "@/lib/messages";
 import { api, sources, formatDate } from "@/lib/api";
 import {
   fields,
@@ -19,6 +20,8 @@ import {
 } from "@/lib/metadata";
 import type { Crop, ImageChoice, Variant, WorkDetail, Work as WorkRecord } from "@/lib/types";
 import {
+  ArtworkImage,
+  TranslationOriginal,
   Empty,
   Select,
   Status,
@@ -57,6 +60,8 @@ export function Work({
   reportEdit: EditReporter;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [savedNotice, setSavedNotice] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [pending, setPending] = useState<"save" | "prepare" | null>(null);
   const [cropImage, setCropImage] = useState<{ role: string; choice: ImageChoice; url: string; coverPreview?: string } | null>(null);
   const [mode, setMode] = useState("fill_missing");
@@ -87,6 +92,8 @@ export function Work({
                 variants: detail.variants,
                 process: detail.process,
                 last_result: detail.last_result,
+                warnings: detail.warnings,
+                metadata_error: detail.metadata_error,
                 status: detail.status,
                 editable: detail.editable,
               },
@@ -96,23 +103,22 @@ export function Work({
   });
   useEffect(() => {
     const controller = new AbortController();
-    run(async () =>
-      receive(
-        await api<WorkDetail>(
-          `works/detail?path=${encodeURIComponent(path)}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`,
-          "GET",
-          undefined,
-          controller.signal,
-        ),
-      ),
-    );
+    run(async () => {
+      try {
+        const value = await api<WorkDetail>(`works/detail?path=${encodeURIComponent(path)}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`, "GET", undefined, controller.signal);
+        if (!controller.signal.aborted) { receive(value); setLoadFailed(false); }
+      } catch (error) {
+        if (!controller.signal.aborted) setLoadFailed(true);
+        throw error;
+      }
+    });
     return () => controller.abort();
   }, [path, taskId, revision, run]);
   useEffect(() => {
     reportEdit({ dirty: changed, saving: !!pending });
     return () => reportEdit({ dirty: false, saving: false });
   }, [changed, pending, reportEdit]);
-  if (!editor) return <Empty>正在读取作品…</Empty>;
+  if (!editor) return <Empty>{loadFailed ? "作品读取失败，请重新进入" : "正在读取作品…"}</Empty>;
   const { detail, draft } = editor;
   const base = `works/${encodeURIComponent(detail.code)}`;
   const updatedAt = detail.process?.events?.at(-1)?.time;
@@ -128,6 +134,7 @@ export function Work({
     action: "save" | "prepare" = "prepare",
   ) {
     run(async () => {
+      setSavedNotice(false);
       setPending(action);
       try {
         await fn();
@@ -196,6 +203,7 @@ export function Work({
         image_choices: editor!.images,
       });
     accept(result);
+    setSavedNotice(true);
     saved(result);
   }
   const imageFiles = Object.fromEntries(
@@ -285,6 +293,7 @@ export function Work({
     };
     if (!(source in options)) options[source] = sources[source] ?? source;
     const sourceVariant = variants.find((v) => v.source === source);
+    const fieldErrors = editor.fieldSources[key] ? sourceVariant?.translation_errors : detail.last_result?.translation_errors;
     const translated =
       source !== "custom" &&
       (editor.fieldSources[key]
@@ -305,17 +314,10 @@ export function Work({
     return (
       <div key={key} className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <label htmlFor={`metadata-${key}`} className="text-sm font-medium">
-            {label}
-            {translated && (
-              <span
-                title={original}
-                className="ml-2 rounded bg-muted px-1 text-xs"
-              >
-                译
-              </span>
-            )}
-          </label>
+          <div className="flex items-center gap-2">
+            <label htmlFor={`metadata-${key}`} className="text-sm font-medium">{label}</label>
+            {translated && <TranslationOriginal label={label} text={original} />}
+          </div>
           <Select
             label={`${label}来源`}
             value={source}
@@ -328,6 +330,7 @@ export function Work({
           <Textarea
             id={`metadata-${key}`}
             aria-label={label}
+            disabled={locked}
             required={key === "title"}
             rows={key === "plot" ? 6 : 2}
             value={draft[key]}
@@ -338,6 +341,7 @@ export function Work({
             id={`metadata-${key}`}
             aria-label={label}
             type={type}
+            disabled={locked}
             min={type === "number" ? 0 : undefined}
             value={draft[key]}
             placeholder={key === "release_date" ? "2026年10月24日" : undefined}
@@ -345,11 +349,11 @@ export function Work({
           />
         )}
         {source !== "custom" &&
-          sourceVariant?.translation_errors
+          fieldErrors
             ?.filter((error) => error.field === key)
             .map((error, index) => (
               <p key={index} className="text-xs text-destructive">
-                翻译失败：{error.error}
+                翻译失败：{errorText(error.error)}
               </p>
             ))}
       </div>
@@ -408,7 +412,9 @@ export function Work({
       >
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="min-w-0 space-y-6">
-            <fieldset disabled={locked}>{renderField(fields[0])}</fieldset>
+            {detail.warnings.length > 0 && <div role="status" className="space-y-1 rounded-lg border p-3 text-sm">{detail.warnings.map((warning) => <p key={warning}>{errorText(warning)}</p>)}</div>}
+            <Diagnostics report={detail.last_result} title="当前文件问题" active={detail.status === "running" || detail.status === "queued"} />
+            {renderField(fields[0])}
             <section aria-label="作品图片" className="min-w-0 space-y-6">
               {imageGroups.map((group) => {
                 const current = groupSource(group);
@@ -429,6 +435,7 @@ export function Work({
                         }}
                       />
                     </div>
+                    {!available.length && <p className="text-sm text-muted-foreground">暂无可用来源候选</p>}
                     <div className={group.key === "samples" ? "grid grid-cols-2 gap-4 sm:grid-cols-4" : "min-w-0"}>
                       {group.roles.map((role) => {
                         const image = preview(role);
@@ -441,7 +448,7 @@ export function Work({
                             aria-label={`调整${imageLabel(role)}`}
                             onClick={() => openCrop(role)}
                           >
-                            <img src={image} alt={imageLabel(role)} className="h-auto w-auto max-h-full max-w-full object-contain" loading="lazy" />
+                            <ArtworkImage src={image} alt={imageLabel(role)} className="h-auto w-auto max-h-full max-w-full object-contain" loading="lazy" />
                           </Button>
                         ) : null;
                       })}
@@ -453,13 +460,13 @@ export function Work({
             <section aria-label="作品元数据" className="min-w-0 space-y-4">
               {detail.metadata_error && (
                 <p className="text-sm text-destructive">
-                  {detail.metadata_error}
+                  {errorText(detail.metadata_error)}
                 </p>
               )}
 
-              <fieldset disabled={locked} className="space-y-4">
+              <div className="space-y-4">
                 {fields.slice(1).map(renderField)}
-              </fieldset>
+              </div>
               <div className="space-y-2 break-all border-t pt-4 pb-6 text-sm text-muted-foreground">
                 <p className="font-medium text-foreground">文件路径</p>
                 {detail.media_files.map((file) => (
@@ -536,11 +543,12 @@ export function Work({
                 );
               })}
             </div>
-            <Diagnostics report={detail.process?.result} />
+            <Diagnostics report={detail.process?.result} title="任务记录问题" active={processActive} taskRecord />
           </section>
         </div>
         <div className="h-8" aria-hidden="true" />
         <StickyActions>
+          {savedNotice && !changed && <span role="status" className="text-sm text-muted-foreground">已保存</span>}
           <Button type="submit" disabled={locked || !changed}>
             {pending === "save" ? "保存中" : "保存"}
           </Button>

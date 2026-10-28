@@ -192,6 +192,9 @@ class Translator:
     async def metadata(self, metadata: Metadata, *, fields=("title", "plot"), names: re.Pattern | None) -> TranslationReport:
         report = TranslationReport()
         if not self.enabled:
+            if self.settings.enabled and self.available is False:
+                report.errors = [{"field": field, "error": self.validation_error or "翻译服务不可用"}
+                                 for field in fields if getattr(metadata, field)]
             return report
         for field in fields:
             value = getattr(metadata, field)

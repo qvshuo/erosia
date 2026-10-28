@@ -7,6 +7,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ArtworkImage } from "./shared";
+import { errorText } from "@/lib/messages";
 import { api } from "@/lib/api";
 import { cropBox, percentCrop } from "@/lib/crop";
 import type { Box, Crop, ImageChoice } from "@/lib/types";
@@ -24,6 +26,7 @@ export default function CropEditor({
   applied: (crop: Crop) => void;
 }) {
   const [result, setResult] = useState<Crop | null>(null);
+  const [loadedImage, setLoadedImage] = useState<string>();
   const [selection, setSelection] = useState<PercentCrop>();
   const [pending, setPending] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -52,7 +55,7 @@ export default function CropEditor({
         setConfirmed(true);
       } catch (e) {
         if (!abort.signal.aborted && ticket === request.current)
-          setError(e instanceof Error ? e.message : "裁剪失败");
+          setError(errorText(e));
       } finally {
         if (!abort.signal.aborted && ticket === request.current)
           setPending(false);
@@ -71,7 +74,7 @@ export default function CropEditor({
       request.current++;
     };
   }, [input]);
-  const locked = busy;
+  const locked = busy || loadedImage !== image;
   return (
     <Dialog
       open
@@ -81,7 +84,7 @@ export default function CropEditor({
     >
       <DialogContent
         aria-describedby={undefined}
-        className="h-[90dvh] max-h-[90dvh] grid-rows-[auto_auto_minmax(0,1fr)_24px_auto] overflow-hidden sm:max-w-4xl"
+        className="h-[90dvh] max-h-[90dvh] grid-rows-[auto_auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden sm:max-w-4xl"
       >
         <DialogHeader>
           <DialogTitle>调整封面</DialogTitle>
@@ -102,6 +105,7 @@ export default function CropEditor({
             居中裁剪
           </Button>
         </div>
+        <p className="text-sm text-muted-foreground">{busy ? "作品处理中，暂不能修改" : loadedImage !== image ? error ? "请返回后重新打开图片" : "正在加载原图…" : "先选择裁剪方式，再调整选区"}</p>
         <div className="grid min-h-0 items-start gap-4 overflow-auto sm:grid-cols-[1fr_140px]">
           <div className="min-w-0 rounded-md border bg-muted/30 p-2">
             <ReactCrop
@@ -137,8 +141,10 @@ export default function CropEditor({
                   });
               }}
             >
-              <img
+              <ArtworkImage
                 src={image}
+                onLoad={() => setLoadedImage(image)}
+                onError={() => { setLoadedImage(undefined); setError("原图加载失败，请返回后重试"); }}
                 alt="裁剪原图"
                 className="block max-h-[55dvh] max-w-full object-contain"
                 draggable={false}
@@ -147,7 +153,7 @@ export default function CropEditor({
           </div>
           {(result || coverPreview) && (
             <div className="space-y-2">
-              <img
+              <ArtworkImage
                 src={result?.preview ?? coverPreview}
                 className="mx-auto aspect-[2/3] w-32 rounded-md"
                 alt="裁剪预览"
@@ -160,7 +166,7 @@ export default function CropEditor({
         </div>
         <p
           role={error ? "alert" : "status"}
-          className={`text-sm ${error ? "text-destructive" : "text-muted-foreground"}`}
+          className={`min-h-5 break-words text-sm ${error ? "text-destructive" : "text-muted-foreground"}`}
         >
           {error || (pending ? "正在生成预览…" : "\u00a0")}
         </p>

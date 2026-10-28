@@ -130,6 +130,7 @@ export interface Translation {
   interval_seconds: number;
 }
 export interface Settings {
+  pending_settings: boolean;
   translation_status: { valid: boolean | null; message: string };
   default_routes: Record<string, string[]>;
   media_directories: string[];

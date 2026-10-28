@@ -13,6 +13,7 @@ import {
 import { api, categories } from "@/lib/api";
 import type { LibraryActor, Work } from "@/lib/types";
 import {
+  ArtworkImage,
   Empty,
   SummaryHeader,
   WorkTitle,
@@ -46,20 +47,22 @@ export function Actors({
   const search = useDebounce(query);
   const [filter, setFilter] = useState("all");
   const [actors, setActors] = useState<LibraryActor[]>([]);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [pending, setPending] = useState(false);
   useEffect(() => {
     if (name !== undefined) return;
     const controller = new AbortController();
+    setLoadState("loading");
     run(async () => {
-      const rows = await api<LibraryActor[]>(
-        `actors/library?query=${encodeURIComponent(search)}`,
-        "GET",
-        undefined,
-        controller.signal,
-      );
-      if (!controller.signal.aborted) setActors(rows);
+      try {
+        const rows = await api<LibraryActor[]>(`actors/library?query=${encodeURIComponent(search)}`, "GET", undefined, controller.signal);
+        if (!controller.signal.aborted) { setActors(rows); setLoadState("ready"); }
+      } catch (error) {
+        if (!controller.signal.aborted) setLoadState("error");
+        throw error;
+      }
     });
     return () => controller.abort();
   }, [name, search, revision, run]);
@@ -78,7 +81,7 @@ export function Actors({
       const error = result.portraits.find(
         (item) => item.status === "error" || item.status === "not_found",
       );
-      if (error) throw new Error(error.error || "未找到头像，保留旧图");
+      if (error) throw new Error(error.error || (actor.portrait ? "未找到头像，已保留旧图" : "未找到可用头像"));
       await refresh();
     } finally {
       setPending(false);
@@ -138,7 +141,7 @@ export function Actors({
                 >
                   <TableCell>
                     {a.portrait ? (
-                      <img
+                      <ArtworkImage
                         className="size-12 rounded-md object-cover"
                         src={portraitURL(a)}
                         alt={a.name}
@@ -157,7 +160,7 @@ export function Actors({
                     {a.name}
                     {a.status === "ambiguous" && (
                       <p className="mt-1 text-sm text-muted-foreground">
-                        同名待确认
+                        别名有歧义
                       </p>
                     )}
                   </TableCell>
@@ -166,7 +169,7 @@ export function Actors({
               ))}
             </TableBody>
           </Table>
-          {!rows.length && <Empty />}
+          {!rows.length && <Empty>{loadState === "loading" ? "正在读取演员…" : loadState === "error" ? "演员列表读取失败" : search || filter !== "all" ? "没有匹配的演员" : "暂无记录"}</Empty>}
           <Pagination
             page={current}
             pages={pages}
@@ -214,29 +217,31 @@ function ActorDetail({
 }) {
   const [actor, setActor] = useState<LibraryActor | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   useEffect(() => {
     const controller = new AbortController();
     run(async () => {
-      const rows = await api<LibraryActor[]>(
-        `actors/library?query=${encodeURIComponent(name)}`,
-        "GET",
-        undefined,
-        controller.signal,
-      );
-      const found = rows.find((a) => a.name === name);
-      if (!controller.signal.aborted) {
-        setActor(found ?? null);
-        setLoaded(true);
+      try {
+        const rows = await api<LibraryActor[]>(`actors/library?query=${encodeURIComponent(name)}`, "GET", undefined, controller.signal);
+        if (!controller.signal.aborted) {
+          setActor(rows.find((actor) => actor.name === name) ?? null);
+          setLoaded(true);
+          setLoadFailed(false);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) setLoadFailed(true);
+        throw error;
       }
     });
     return () => controller.abort();
-  }, [name, works, revision, run]);
+  }, [name, revision, run]);
+  const codes = new Set(actor?.codes);
   const rows = works.filter(
     (w) =>
-      actor?.codes.includes(w.code) &&
+      codes.has(w.code) &&
       `${w.code} ${w.path} ${w.title ?? ""}`
         .toLowerCase()
         .includes(query.toLowerCase()),
@@ -250,7 +255,7 @@ function ActorDetail({
         返回
       </Button>
       {!actor ? (
-        <Empty>{loaded ? "演员已不在列表中" : "正在读取…"}</Empty>
+        <Empty>{loadFailed ? "演员读取失败，请重新进入" : loaded ? "演员已不在列表中" : "正在读取…"}</Empty>
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-4">
@@ -270,11 +275,14 @@ function ActorDetail({
               {actor.portrait ? "更新头像" : "获取头像"}
             </Button>
           </div>
+          {disabled && <p role="status" className="text-sm text-muted-foreground">任务或头像处理中，请稍候</p>}
+          {!actor.portrait_eligible && <p className="text-sm text-muted-foreground">{actor.status === "ambiguous" ? "别名有歧义，暂不能获取头像" : "演员名称无效，暂不能获取头像"}</p>}
+          {!actor.codes.length && <p className="text-sm text-muted-foreground">暂无作品，暂不能获取头像</p>}
           <div className="grid items-start gap-5 sm:grid-cols-[160px_1fr]">
             <Card>
               <CardContent>
                 {actor.portrait ? (
-                  <img
+                  <ArtworkImage
                     className="mx-auto max-h-64 w-full rounded-md object-contain"
                     src={portraitURL(actor)}
                     alt={actor.name}
@@ -289,7 +297,7 @@ function ActorDetail({
                 )}
                 {actor.status === "ambiguous" && (
                   <p className="mt-3 text-sm text-muted-foreground">
-                    同名待确认
+                    别名有歧义
                   </p>
                 )}
               </CardContent>
@@ -304,7 +312,7 @@ function ActorDetail({
                   }}
                 />
               </div>
-              <Table className="[&_th:first-child]:pl-4 [&_td:first-child]:pl-4">
+              <Table className="min-w-[560px] [&_th:first-child]:pl-4 [&_td:first-child]:pl-4">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-28">作品</TableHead>
@@ -334,13 +342,13 @@ function ActorDetail({
                         </TableCell>
                         <TableCell>{categories[work.category]}</TableCell>
                         <TableCell>
-                          <Status status={work.status} />
+                          <Status status={work.status} label={work.status === "pending" ? "未刮削" : undefined} />
                         </TableCell>
                       </TableRow>
                     ))}
                 </TableBody>
               </Table>
-              {!rows.length && <Empty />}
+              {!rows.length && <Empty>{query ? "没有匹配的作品" : "暂无关联作品"}</Empty>}
               <Pagination
                 page={current}
                 pages={pages}

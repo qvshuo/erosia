@@ -33,6 +33,7 @@ export default function DirectoryBrowser({
     const controller = new AbortController();
     setLoading(true);
     setError("");
+    setView(null);
     void api<DirectoryView>(
       `directories?kind=${kind}${target.path ? `&path=${encodeURIComponent(target.path)}` : ""}`,
       "GET",
@@ -90,6 +91,8 @@ export default function DirectoryBrowser({
         <div className="max-h-64 overflow-y-auto rounded-md border">
           {loading ? (
             <Empty>正在读取…</Empty>
+          ) : error ? (
+            <Empty>目录读取失败</Empty>
           ) : !view?.directories.length ? (
             <Empty>暂无文件夹</Empty>
           ) : (
@@ -111,6 +114,7 @@ export default function DirectoryBrowser({
             {error}
           </p>
         )}
+        {view?.path !== path && !loading && <p className="text-sm text-muted-foreground">输入路径后按回车加载</p>}
         <p className="break-all text-sm text-muted-foreground">
           已选目录：{view?.path ?? "无"}
         </p>

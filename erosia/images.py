@@ -432,6 +432,7 @@ class Gfriends:
                 if not url:
                     records.append({"name": name, "status": "not_found"})
                     self.completed[(name, replace)] = records[-1]
+                    report_progress("portraits", "not_found", source="gfriends", message=name)
                     continue
                 image = validate_image(await self.document(url, 32 * 1024 * 1024))
                 extension = ".jpg" if image.format == "jpeg" else "." + image.format

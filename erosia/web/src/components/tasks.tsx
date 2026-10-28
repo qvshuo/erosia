@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { errorText } from "@/lib/messages";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -80,51 +82,42 @@ export function Process({
   return <p className="text-sm text-muted-foreground">{label}</p>;
 }
 
-export function Diagnostics({ report }: { report: Report | null | undefined }) {
+export function Diagnostics({ report, title, active = false, taskRecord = false }: {
+  report: Report | null | undefined;
+  title: string;
+  active?: boolean;
+  taskRecord?: boolean;
+}) {
   if (!report) return null;
+  const labels: Record<string, string> = { metadata: "元数据", translation: "翻译", images: "图片", portraits: "头像" };
+  const incomplete = (report.incomplete_stages ?? []).filter((stage) => !active || report.stages?.[stage] !== "pending");
   const notices = [
-    report.error,
-    ...(report.warnings ?? [])
-      .filter(
-        (warning) =>
-          !warning.includes("used webpage fallback") &&
-          !warning.includes("missing plot") &&
-          !warning.includes("missing artwork") &&
-          !report.sources?.some(
-            (source) =>
-              source.status !== "found" &&
-              warning.startsWith(`${source.source}:`),
-          ),
-      )
-      .map((warning) => {
-        const source = Object.keys(sources).find((source) =>
-          warning.startsWith(source + ":"),
-        );
-        return (
-          source ? sources[source] + warning.slice(source.length) : warning
-        )
-          .replace("missing plot", "缺少剧情")
-          .replace("missing artwork", "缺少图片");
-      }),
-    ...(report.translation_errors ?? []).map((item) => `翻译：${item.error}`),
-    ...(report.images ?? [])
-      .filter((item) => item.status === "error")
-      .map((item) => `图片：${item.message ?? item.error}`),
-    ...(report.portraits ?? [])
-      .filter((item) => item.status === "error")
-      .map((item) => `头像：${item.name} · ${item.error}`),
+    report.error ? errorText(report.error) : "",
+    ...(taskRecord ? report.warnings ?? [] : []).filter((warning) =>
+      !warning.includes("used webpage fallback") && !warning.includes("missing plot") && !warning.includes("missing artwork") &&
+      !report.sources?.some((source) => source.status !== "found" && warning.startsWith(`${source.source}:`)))
+      .map((warning) => errorText(warning)),
+    ...(report.translation_errors ?? []).map((item) => `翻译：${errorText(item.error)}`),
+    ...(report.images ?? []).filter((item) => item.status === "error")
+      .map((item) => `图片：${errorText(item.message ?? item.error)}`),
+    ...(report.portraits ?? []).filter((item) => item.status === "error")
+      .map((item) => `头像：${item.name} · ${errorText(item.error)}`),
+    incomplete.length ? `未完成：${incomplete.map((stage) => labels[stage] ?? stage).join("、")}` :
+      report.partial && !active ? "部分阶段未完成" : "",
   ].filter(Boolean);
-  if (!notices.length && !report.partial) return null;
+  const missingPortraits = taskRecord ? (report.portraits ?? []).filter((item) => item.status === "not_found").map((item) => item.name) : [];
+  const preservedNames = taskRecord ? (report.actor_issues ?? []).filter((issue) => !(report.portraits ?? []).some((portrait) => portrait.name === issue.name && portrait.status === "error")).map((issue) => issue.name) : [];
+  if (!notices.length && !missingPortraits.length && !preservedNames.length) return null;
   return (
-    <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-muted-foreground">
-      <p className="font-medium text-foreground">待处理问题</p>
-      {report.partial && <p>部分阶段未完成</p>}
-      {[...new Set(notices)].map((notice, index) => (
-        <p key={index} className="break-words">
-          {notice}
-        </p>
-      ))}
-    </div>
+    <Alert role="status" className={notices.length ? "border-amber-500/20 bg-amber-500/5" : "bg-muted/20"}>
+      <AlertTitle>{notices.length ? title : "处理结果"}</AlertTitle>
+      <AlertDescription>
+        {taskRecord && <p>记录当次结果，后续修复不改写</p>}
+        {[...new Set(notices)].map((notice) => <p key={notice}>{notice}</p>)}
+        {missingPortraits.length > 0 && <p>未匹配头像：{[...new Set(missingPortraits)].join("、")}</p>}
+        {preservedNames.length > 0 && <p>别名有歧义，已保留署名：{[...new Set(preservedNames)].join("、")}</p>}
+      </AlertDescription>
+    </Alert>
   );
 }
 export function Tasks({
@@ -147,6 +140,7 @@ export function Tasks({
   confirm: Confirm;
 }) {
   const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [query, setQuery] = useState("");
   const search = useDebounce(query);
   const [filter, setFilter] = useState("all");
@@ -157,13 +151,13 @@ export function Tasks({
     if (!id) return;
     const controller = new AbortController();
     run(async () => {
-      const value = await api<TaskDetail>(
-        `tasks/${id}?page=${page}&page_size=${pageSize}&status=${filter}&query=${encodeURIComponent(search)}`,
-        "GET",
-        undefined,
-        controller.signal,
-      );
-      if (!controller.signal.aborted) setDetail(value);
+      try {
+        const value = await api<TaskDetail>(`tasks/${id}?page=${page}&page_size=${pageSize}&status=${filter}&query=${encodeURIComponent(search)}`, "GET", undefined, controller.signal);
+        if (!controller.signal.aborted) { setDetail(value); setLoadFailed(false); }
+      } catch (error) {
+        if (!controller.signal.aborted) setLoadFailed(true);
+        throw error;
+      }
     });
     return () => controller.abort();
   }, [id, page, pageSize, filter, search, tick, run]);
@@ -213,8 +207,8 @@ export function Tasks({
           <ArrowLeft />
           返回
         </Button>
-        {!detail ? (
-          <Empty>正在读取…</Empty>
+        {!detail || detail.id !== id ? (
+          <Empty>{loadFailed ? "任务读取失败，请重新进入" : "正在读取…"}</Empty>
         ) : (
           <>
             <div className="flex items-center justify-between gap-3">
@@ -225,6 +219,7 @@ export function Tasks({
               {active(detail) && action(detail)}
             </div>
             <TaskSummary task={detail} />
+            {pending && <p role="status" className="text-sm text-muted-foreground">正在更新任务记录…</p>}
             <div className="flex flex-wrap gap-3">
               <SearchInput
                 value={query}
@@ -253,11 +248,11 @@ export function Tasks({
             </div>
             {detail.error && (
               <p role="alert" className="text-sm text-destructive">
-                {detail.error}
+                {errorText(detail.error)}
               </p>
             )}
             <div className="overflow-hidden rounded-lg border">
-              <Table>
+              <Table className="min-w-[640px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-28 pl-4">作品</TableHead>
@@ -305,7 +300,7 @@ export function Tasks({
                   })}
                 </TableBody>
               </Table>
-              {!detail.items.length && <Empty />}
+              {!detail.items.length && <Empty>{search || filter !== "all" ? "没有匹配的任务项" : "暂无任务项"}</Empty>}
             </div>
             <Pagination
               page={detail.page}
@@ -328,6 +323,7 @@ export function Tasks({
     current = Math.min(page, pages);
   return (
     <div className="space-y-4">
+      {pending && <p role="status" className="text-sm text-muted-foreground">正在更新任务记录…</p>}
       <div className="overflow-hidden rounded-lg border">
         <div className="flex flex-wrap gap-3 border-b p-4">
           <SearchInput
@@ -408,7 +404,7 @@ export function Tasks({
             ))}
           </TableBody>
         </Table>
-        {!rows.length && <Empty />}
+        {!rows.length && <Empty>{query || filter !== "all" ? "没有匹配的任务" : "暂无记录"}</Empty>}
         <Pagination
           page={current}
           pages={pages}

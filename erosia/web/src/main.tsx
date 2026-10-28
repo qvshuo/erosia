@@ -13,6 +13,7 @@ import {
   UsersRound,
   Settings2,
 } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { createRoot } from "react-dom/client";
 import { version } from "../package.json";
@@ -26,6 +27,7 @@ import {
   type Confirm,
   type EditState,
 } from "@/components/shared";
+import { errorText } from "@/lib/messages";
 import { api, active } from "@/lib/api";
 import type {
   Settings as Preferences,
@@ -62,7 +64,7 @@ function routeHash() {
         decodeURIComponent(parts[2]!)) ||
       (["tasks", "actors"].includes(parts[0]!) &&
         parts.length === 2 &&
-        parts[1])
+        decodeURIComponent(parts[1]!))
     )
       return value;
   } catch {
@@ -104,10 +106,9 @@ function App() {
     setConfirmation(null);
   }
   const run = useCallback((fn: () => Promise<unknown>) => {
-    setNotice("");
     void fn().catch((error: unknown) => {
-      if (error instanceof Error && error.name !== "AbortError")
-        setNotice(error.message);
+      if (!(error instanceof Error && error.name === "AbortError"))
+        setNotice(errorText(error));
     });
   }, []);
   const mergeWorks = useCallback((updates: WorkRecord[]) => {
@@ -125,6 +126,18 @@ function App() {
     if (poll && !activeIds.length) return;
     const incoming = await api<Task[]>(poll ? `tasks?ids=${activeIds.join(",")}` : "tasks");
     const byId = new Map(incoming.map((task) => [task.id, task]));
+    if (poll && activeIds.some((id) => !byId.has(id))) {
+      // Switching the metadata directory selects another runtime scope and task list.
+      const [preferences, catalog, records] = await Promise.all([api<Preferences>("settings"), api<WorkRecord[]>("works"), api<Task[]>("tasks")]);
+      setSettings(preferences);
+      setWorks(catalog);
+      previousTasks.current = records;
+      setTasks(records);
+      workCursor.current = null;
+      setActorRevision((value) => value + 1);
+      setTick((value) => value + 1);
+      return;
+    }
     const next = poll ? previousTasks.current.map((task) => byId.get(task.id) ?? task) : incoming;
     const ids = [...new Set([...previousTasks.current, ...next].filter(active).map((task) => task.id))];
     if (ids.length) {
@@ -134,8 +147,9 @@ function App() {
       mergeWorks(updates.works);
       workCursor.current = updates.time;
     }
+    const previousById = new Map(previousTasks.current.map((task) => [task.id, task]));
     if (next.some((task) => {
-      const before = previousTasks.current.find((item) => item.id === task.id);
+      const before = previousById.get(task.id);
       return task.progress !== before?.progress || task.status !== before?.status;
     })) setActorRevision((value) => value + 1);
     previousTasks.current = next;
@@ -161,10 +175,10 @@ function App() {
       (edit.current.dirty && !(await confirm("离开页面", "未保存的修改会丢失")))
     )
       return false;
+    if (next === "settings") setSettings(await api<Preferences>("settings"));
     if (next.startsWith("library/work/")) setReturnTo(route);
     setRoute(next);
     location.hash = next;
-    setNotice("");
     edit.current = { dirty: false, saving: false };
     return true;
   }
@@ -249,18 +263,17 @@ function App() {
         ))}
       </nav>
       {notice && (
-        <div
-          role="alert"
-          className="mb-4 flex items-start justify-between gap-3 rounded-md border border-destructive/30 p-3 text-sm text-destructive"
+        <Alert
+          className="sticky top-2 z-40 mb-4 flex max-h-[40dvh] items-start justify-between gap-3 space-y-0 overflow-auto border-destructive/30 text-destructive shadow-sm"
         >
-          <p>{notice}</p>
+          <p className="min-w-0 break-words">{notice}</p>
           <Button variant="ghost" size="sm" onClick={() => setNotice("")}>
             关闭
           </Button>
-        </div>
+        </Alert>
       )}
       {!settings ? (
-        <Empty>正在连接服务…</Empty>
+        <Empty>{notice ? "连接服务失败，请刷新重试" : "正在连接服务…"}</Empty>
       ) : (
         <Suspense fallback={<Empty>正在载入…</Empty>}>
           {tab === "library" &&
@@ -317,6 +330,7 @@ function App() {
           {tab === "settings" && (
             <Settings
               settings={settings}
+              tasksActive={busy}
               run={run}
               confirm={confirm}
               reportEdit={reportEdit}

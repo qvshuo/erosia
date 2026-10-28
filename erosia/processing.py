@@ -163,7 +163,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
                    "missing_only": missing_only, "overwrite_custom": not missing_only}
         selection["pending_images"] = request
     else:
-        report["warnings"].append("所选来源无图片，已保留旧图")
+        report["warnings"].append("所选来源无图片" + ("，已保留旧图" if image_manifest(target_folder(output, work.code), work) else ""))
     report["stages"] = {"metadata": "success", "translation": "failed" if report["translation_errors"] else "success",
         "images": "pending" if request else "skipped", "portraits": "pending" if portraits else "skipped"}
     report_progress("metadata")

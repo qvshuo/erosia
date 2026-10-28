@@ -133,6 +133,7 @@ def create_app(
         return {
             **redact(current_settings().model_dump(mode="json")),
             "configured": app.state.runner is not None,
+            "pending_settings": bool(app.state.runner and app.state.runner.pending_settings),
             "translation_status": {"valid": app.state.runner.translator.available, "message": app.state.runner.translator.validation_error} if app.state.runner else {"valid": None, "message": "尚未验证"},
             "default_routes": Settings().model_dump(mode="json")["routes"],
             "source_defaults": {

@@ -1,4 +1,5 @@
 import type { WorkDetail } from "./types";
+import { errorText } from "./messages";
 import { statuses } from "./api";
 
 const phases: Record<string, string> = {
@@ -118,7 +119,7 @@ export function sourceProgress(
       const cooldown = event.message?.match(/^冷却 (\d+) 秒$/);
       if (cooldown) {
         const remaining = Math.max(0, Number(cooldown[1]) - Math.floor((now - Date.parse(event.time)) / 1000));
-        label = "冷却中";
+        label = remaining > 0 ? "冷却中" : "等待中";
         message = remaining > 0 ? `冷却 ${remaining} 秒` : "等待来源可用";
       } else {
         label = "等待中";
@@ -135,7 +136,7 @@ export function sourceProgress(
       if (event?.stage === "retry") message = "网络请求失败";
     }
   } else if (status !== "missing") {
-    message = result?.message || outcomes[status] || "";
+    message = result?.message ? errorText(result.message) : outcomes[status] || "";
   } else if (started && !active) {
     message = "未记录来源结果";
   }

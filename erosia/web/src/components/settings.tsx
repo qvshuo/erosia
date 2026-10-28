@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { FolderOpen, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { errorText } from "@/lib/messages";
 import { api, categories, sources } from "@/lib/api";
 import type { Settings as Preferences } from "@/lib/types";
 import {
@@ -16,6 +17,7 @@ const DirectoryBrowser = lazy(() => import("./directory-browser"));
 function settingsDraft({
   configured: _configured,
   translation_status: _translationStatus,
+  pending_settings: _pendingSettings,
   default_routes: _defaultRoutes,
   source_defaults: _defaults,
   source_intervals: _intervals,
@@ -35,14 +37,17 @@ export function Settings({
   run,
   confirm,
   reportEdit,
+  tasksActive,
 }: {
   settings: Preferences;
+  tasksActive: boolean;
   saved: (settings: Preferences) => void;
   run: (fn: () => Promise<void>) => void;
   confirm: Confirm;
   reportEdit: EditReporter;
 }) {
   const [draft, setDraft] = useState(() => settingsDraft(settings));
+  const [savedNotice, setSavedNotice] = useState(false);
   const [pending, setPending] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -62,6 +67,8 @@ export function Settings({
     reportEdit({ dirty: changed, saving: pending });
     return () => reportEdit({ dirty: false, saving: false });
   }, [changed, pending, reportEdit]);
+  const translationConfigured = !!settings.translation.model.trim() && !!settings.translation.api_key.trim();
+  const translationChanged = JSON.stringify(draft.translation) !== JSON.stringify(settings.translation);
   function update<K extends keyof typeof draft>(
     key: K,
     value: (typeof draft)[K],
@@ -75,6 +82,7 @@ export function Settings({
       !(await confirm("切换目录", "现有资料保留在原文件夹"))
     )
       return;
+    setSavedNotice(false);
     setPending(true);
     try {
       const value = await api<Preferences>("settings", "PUT", {
@@ -91,6 +99,7 @@ export function Settings({
       });
       setDraft(settingsDraft(value));
       saved(value);
+      setSavedNotice(true);
     } finally {
       setPending(false);
     }
@@ -222,13 +231,14 @@ export function Settings({
                 {testing ? "测试中" : "测试服务"}
               </Button>
             </div>
+            {!testResult && <p role="status" className="text-sm text-muted-foreground">{translationChanged ? "翻译配置已修改，请重新测试" : !translationConfigured ? "未配置翻译服务" : settings.translation_status.valid === true ? "翻译服务已验证" : settings.translation_status.valid === false ? `翻译服务不可用：${errorText(settings.translation_status.message)}` : "翻译服务尚未验证"}</p>}
             {testResult && (
               <div
                 role="status"
                 className={`rounded-md border p-3 text-sm ${testResult.valid ? "border-emerald-500/30 bg-emerald-500/5" : "border-destructive/30 bg-destructive/5 text-destructive"}`}
               >
                 <p>
-                  {testResult.message}
+                  {errorText(testResult.message)}
                   {testResult.elapsed_seconds !== undefined
                     ? ` · ${testResult.elapsed_seconds.toFixed(2)} 秒`
                     : ""}
@@ -436,7 +446,9 @@ export function Settings({
             </div>
           </section>
         </fieldset>
+        {settings.pending_settings && tasksActive && <div role="status" className="text-sm text-muted-foreground"><p>设置已保存，后续批次生效</p><p>目录将在队列空闲时切换</p></div>}
         <StickyActions>
+          {savedNotice && !changed && <span role="status" className="text-sm text-muted-foreground">已保存</span>}
           <Button
             type="submit"
             disabled={pending || !changed || !draft.media_directories.length}
