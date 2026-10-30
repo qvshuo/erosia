@@ -4,7 +4,7 @@ import re
 from urllib.parse import quote, urljoin
 
 from ..catalog import normalize_code
-from ..http import FetchError, Page
+from ..http import FetchError, Page, response_issue
 from ..models import (
     Actor,
     Candidate,
@@ -63,6 +63,8 @@ class JavBus(Source):
         return self.parse(request, page)
 
     def parse(self, request: ScrapeRequest, page: Page) -> SourceResult:
+        if issue := response_issue(page):
+            raise FetchError(*issue, page)
         selector = page.selector()
 
         def row(label: str, tail: str = "text()") -> str | None:
@@ -73,8 +75,9 @@ class JavBus(Source):
 
         code = row("識別碼", "span[1]/text()") or row("识别码", "span[1]/text()")
         title = text(selector, "//h3/text()")
-        if not code or not title or not selector.css("a.bigImage"):
-            raise FetchError(Status.PARSE_ERROR, "JavBus detail markers missing")
+        missing = [field for field, present in (("catalog", code), ("title", title), ("cover", selector.css("a.bigImage"))) if not present]
+        if missing:
+            raise FetchError(Status.PARSE_ERROR, "JavBus detail markers missing: " + ", ".join(missing))
         code = normalize_code(code)
         title = re.sub(r"^" + re.escape(code) + r"\s*", "", title).strip()
         actors = [

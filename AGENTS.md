@@ -3,7 +3,7 @@
 ## Runtime and delivery
 - Use Docker Compose for builds, deployment and restarts. Python 3.15/pip; local Python checks use `uv run --no-project --python 3.15`. Keep environments, caches, checks and backups outside the repository.
 - `erosia/` owns sources, processing, runtime and API; `erosia/web/` uses strict React/TypeScript, Tailwind CSS 4, shared shadcn/ui and Bun. Python serves the static build; production has no frontend runtime. `emby-plugin/erosia/` owns Emby providers.
-- Use lowercase erosia for product, packages, assembly, providers, protocol and NFO identifiers. Python, web and plugin versions are 1.2.1. C# changes must rebuild tracked `emby-plugin/erosia.dll`.
+- Use lowercase erosia for product, packages, assembly, providers, protocol and NFO identifiers. Python, web and plugin versions are 1.2.2. C# changes must rebuild tracked `emby-plugin/erosia.dll`.
 - Track `bun.lock`, the plugin DLL, used YuNet model and license. Test suites, frontend tests, plugin verification and fixtures stay outside the repository; production builds must work without them. Exclude dist, caches, real settings, databases, logs, backups and screenshots. Ship only `docker-compose.example.yml`; real Compose/data stay untracked. Verify both the complete program and the full candidate file set, including untracked renamed sources.
 - Defaults: port 9307, settings `/data/settings.json`, metadata `/data/metadata`, FlareSolverr `http://flaresolverr:8191/v1` (blank disables it). Validate bundled runtime resources during build and startup.
 

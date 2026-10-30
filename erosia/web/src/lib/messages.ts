@@ -54,6 +54,9 @@ const errors: Record<string, string> = {
   "source denied the exit IP/ASN": "来源拒绝当前出口 IP。",
   "source is unavailable from this exit region": "来源不支持当前出口地区。",
   "source requires an authenticated session": "来源要求登录。",
+  "FC2 requires an authenticated session": "FC2 要求登录，未取得元数据。",
+  "source verification page remains": "来源仍在显示访问验证页。",
+  "AirAV search cards lack catalog numbers or links": "AirAV 结果缺少番号或链接。",
   "source returned HTTP 404": "来源未找到该作品。",
   "FlareSolverr is disabled or client is not open": "访问验证不可用，请检查 FlareSolverr。",
   "CF challenge remains after solver": "访问验证未通过。",
@@ -64,6 +67,13 @@ export function errorText(value: unknown): string {
   if (errors[text]) return errors[text];
   if (text.startsWith("图片保存失败，保留旧图：")) return "图片保存失败，保留旧图：" + errorText(text.slice(12));
   if (text.startsWith("翻译服务不可用：")) return "翻译服务不可用：" + errorText(text.slice(8));
+  for (const [prefix, label] of [["DMM metadata API: ", "DMM 元数据接口："], ["DMM web search: ", "DMM 网页搜索："]] as const) {
+    if (text.startsWith(prefix)) return label + errorText(text.slice(prefix.length));
+  }
+  if (text.startsWith("JavBus detail markers missing: ")) {
+    const labels: Record<string, string> = { catalog: "番号", title: "标题", cover: "封面" };
+    return "JavBus 详情缺少：" + text.slice("JavBus detail markers missing: ".length).split(", ").map((field) => labels[field] ?? field).join("、");
+  }
   const http = text.match(/^(translation|gfriends|source returned)?\s*HTTP (\d+)/);
   if (http) return `${http[1] === "translation" ? "翻译服务" : http[1] === "gfriends" ? "头像来源" : "来源"}返回 HTTP ${http[2]}。`;
   if (/Failed to fetch|Load failed|NetworkError|transport failed/.test(text)) return "网络请求失败，请检查连接。";

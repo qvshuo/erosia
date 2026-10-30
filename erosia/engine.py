@@ -87,8 +87,6 @@ class Scraper:
             finally:
                 lock.release()
             result.elapsed_seconds = time.monotonic() - started
-            if isinstance(self.client, WebClient):
-                self.client.record_outcome(source, result.status)
             if on_result is not None:
                 on_result(result)
             report_progress("source", result.status.value, source)

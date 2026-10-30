@@ -516,9 +516,9 @@ def create_app(
         from .images import validate_image
         client = await service.artwork_client()
         data = await client.image_bytes(source, item["url"], item["referer"])
-        image = validate_image(data, source)
+        image = await asyncio.to_thread(validate_image, data, source)
         if poster:
-            image = validate_image((await asyncio.to_thread(crop_poster, image.content))["preview"])
+            image = await asyncio.to_thread(validate_image, (await asyncio.to_thread(crop_poster, image.content))["preview"])
         return Response(image.content, media_type="image/" + image.format, headers={"Cache-Control": "private, max-age=60"})
 
     @app.get("/api/works/{key}/artwork")

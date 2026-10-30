@@ -58,16 +58,19 @@ class DMM(Source):
     default_url = "https://api.video.dmm.co.jp"
 
     async def content(self, cid: str) -> dict | None:
-        page = await self.client.post_json(
-            self.id,
-            self.base + "/graphql",
-            {
-                "operationName": "FetchDigitalContent",
-                "variables": {"id": cid},
-                "query": QUERY,
-            },
-            headers={"Origin": "https://video.dmm.co.jp", "Referer": "https://video.dmm.co.jp/"},
-        )
+        try:
+            page = await self.client.post_json(
+                self.id,
+                self.base + "/graphql",
+                {
+                    "operationName": "FetchDigitalContent",
+                    "variables": {"id": cid},
+                    "query": QUERY,
+                },
+                headers={"Origin": "https://video.dmm.co.jp", "Referer": "https://video.dmm.co.jp/"},
+            )
+        except FetchError as exc:
+            raise FetchError(exc.status, "DMM metadata API: " + str(exc), exc.page) from exc
         document = page.json()
         if not isinstance(document, dict) or not isinstance(document.get("data"), dict):
             raise FetchError(Status.PARSE_ERROR, "DMM GraphQL returned no data")
@@ -81,11 +84,14 @@ class DMM(Source):
         return work
 
     async def search_cids(self, request: ScrapeRequest) -> list[str]:
-        page = await self.client.get(
-            self.id,
-            "https://www.dmm.co.jp/search/=/searchstr=" + quote(request.code) + "/",
-            cookies={"age_check_done": "1"},
-        )
+        try:
+            page = await self.client.get(
+                self.id,
+                "https://www.dmm.co.jp/search/=/searchstr=" + quote(request.code) + "/",
+                cookies={"age_check_done": "1"},
+            )
+        except FetchError as exc:
+            raise FetchError(exc.status, "DMM web search: " + str(exc), exc.page) from exc
         selector = page.selector()
         urls = selector.css("a[href]::attr(href)").getall()
         # Modern DMM embeds detailUrl strings in its search-state scripts.

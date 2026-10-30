@@ -29,8 +29,10 @@ class AirAV(Source):
         else:
             term = request.code.replace("FC2PPV-", "FC2-PPV-", 1)
             page = await self.client.get(self.id, self.base + "/search_result?kw=" + quote(term))
+            selector = page.selector()
+            cards = selector.css("div.oneVideo")
             candidates = []
-            for node in page.selector().css("div.oneVideo"):
+            for node in cards:
                 heading = text(node, ".//h5//text()") or ""
                 href = text(node, ".//a/@href")
                 if href and (match := re.match(r"^(\S+)", heading)):
@@ -39,7 +41,14 @@ class AirAV(Source):
                     )
             selected = self.select(request, candidates)
             if not selected:
-                if not candidates and not page.selector().css(".oneVideo, .video-list, .search-result"):
+                # Empty pages omit the result grid, but retain the query and zero-page form.
+                heading = " ".join((text(selector, "//h1//text()") or "").split())
+                empty = (heading == f"{term} 的搜尋結果"
+                         and bool(selector.css('input[name="idx"][max="0"]'))
+                         and any(node.attrib.get("value") == term for node in selector.css('input[name="kw"]')))
+                if cards and not candidates:
+                    raise FetchError(Status.PARSE_ERROR, "AirAV search cards lack catalog numbers or links")
+                if not cards and not empty:
                     raise FetchError(Status.PARSE_ERROR, "AirAV search markers missing")
                 return self.missed(request)
             url = self.checked_url(selected.url)

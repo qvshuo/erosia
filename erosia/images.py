@@ -75,10 +75,13 @@ def validate_image(data: bytes, source: SourceId | None = None) -> ImageData:
             width, height = image.size
             image_format = image.format
             image.verify()
+        # Header verification alone can accept JPEGs whose pixel stream is corrupt.
+        with Image.open(BytesIO(data)) as image:
+            image.load()
         if not image_format or width < 1 or height < 1:
             raise ValueError("invalid image dimensions")
         return ImageData(data, image_format.lower(), width, height, decoded)
-    except (UnidentifiedImageError, OSError, SyntaxError) as exc:
+    except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
         raise ValueError("artwork is corrupt") from exc
 
 
@@ -126,7 +129,7 @@ async def _save_images(
         plan.append((covers[0] if covers else posters[0], "fanart"))
     samples = list({(item.source, item.url): item for item in items if item.role == "sample"}.values())
     plan.extend((item, f"fanart{i + 1}") for i, item in enumerate(samples[:100]))
-    records, downloaded = [], {}
+    records, downloaded, download_errors = [], {}, {}
 
     def existing(base):
         return (
@@ -152,17 +155,23 @@ async def _save_images(
             if placeholder_url(item.source, item.url):
                 raise ValueError("来源返回占位图")
             identity = (item.source, item.url)
+            if identity in download_errors:
+                raise ValueError(download_errors[identity])
             if identity not in downloaded:
                 report_progress("images", source=item.source, message=f"下载 {role}")
-                downloaded[identity] = validate_image(
-                    await client.image_bytes(item.source, item.url, item.referer),
-                    item.source,
-                )
+                try:
+                    downloaded[identity] = await asyncio.to_thread(validate_image,
+                        await client.image_bytes(item.source, item.url, item.referer),
+                        item.source,
+                    )
+                except (FetchError, ValueError, OSError) as exc:
+                    download_errors[identity] = str(exc)
+                    raise
             image = downloaded[identity]
             if role == "poster":
                 report_progress("crop")
                 cropped = await asyncio.to_thread(crop_poster, image.content)
-                image = validate_image(cropped["content"], item.source)
+                image = await asyncio.to_thread(validate_image, cropped["content"], item.source)
             extension = ".jpg" if image.format == "jpeg" else "." + image.format
             for base in paths:
                 if missing_only and existing(base):
@@ -434,7 +443,7 @@ class Gfriends:
                     self.completed[(name, replace)] = records[-1]
                     report_progress("portraits", "not_found", source="gfriends", message=name)
                     continue
-                image = validate_image(await self.document(url, 32 * 1024 * 1024))
+                image = await asyncio.to_thread(validate_image, await self.document(url, 32 * 1024 * 1024))
                 extension = ".jpg" if image.format == "jpeg" else "." + image.format
                 target = self.output / "actors" / (name + extension)
                 atomic_write(target, image.content)
@@ -459,7 +468,7 @@ async def selected_image(client, choice, variants, target, stems):
             raise ValueError("图片文件不可用")
         if path.stat().st_size > 32 * 1024 * 1024:
             raise ValueError("artwork exceeds 32 MiB")
-        image = validate_image(path.read_bytes())
+        image = await asyncio.to_thread(lambda: validate_image(path.read_bytes()))
     else:
         source = choice.get("source")
         variant = variants.get(source)
@@ -472,7 +481,7 @@ async def selected_image(client, choice, variants, target, stems):
         item = items[index]
         if placeholder_url(source, item["url"]):
             raise ValueError("来源返回占位图")
-        image = validate_image(await client.image_bytes(SourceId(source), item["url"], item["referer"]), SourceId(source))
+        image = await asyncio.to_thread(validate_image, await client.image_bytes(SourceId(source), item["url"], item["referer"]), SourceId(source))
     if choice.get("fingerprint") and hashlib.sha256(image.content).hexdigest() != choice["fingerprint"]:
         raise ValueError("source image changed; preview again")
     return image
@@ -494,7 +503,7 @@ async def save_image_choices(client, choices, variants, target, stems, *, replac
         if box is not None and (role != "poster" or not choice.get("fingerprint")):
             raise ValueError("invalid crop selection")
         if role == "poster":
-            image = validate_image((await asyncio.to_thread(crop_poster, image.content, tuple(box) if box is not None else None))["content"])
+            image = await asyncio.to_thread(validate_image, (await asyncio.to_thread(crop_poster, image.content, tuple(box) if box is not None else None))["content"])
         extension = ".jpg" if image.format == "jpeg" else "." + image.format
         staged.append((role, extension, image.content))
     records = []

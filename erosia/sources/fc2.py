@@ -28,7 +28,12 @@ class FC2(Source):
             if request.source_url
             else self.base + f"/article/{article_id}/?lang=ja"
         )
-        page = await self.client.get(self.id, url, cookies={"language": "ja", "wei6H": "1"})
+        try:
+            page = await self.client.get(self.id, url, cookies={"language": "ja", "wei6H": "1"})
+        except FetchError as exc:
+            if exc.status == Status.LOGIN_REQUIRED:
+                raise FetchError(exc.status, "FC2 requires an authenticated session", exc.page) from exc
+            raise
         selector = page.selector()
         if "couldn't find products" in page.text.lower() or "商品が見つかりません" in page.text:
             return self.missed(request)
