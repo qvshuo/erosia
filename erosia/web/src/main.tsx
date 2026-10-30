@@ -117,8 +117,8 @@ function App() {
     setWorks((current) => current.map((work) => byPath.get(work.path) ?? work));
   }, []);
   const savedWork = useCallback((work: WorkRecord) => {
-    const { code, path, category, status, media_files, warnings, title, actors } = work;
-    mergeWorks([{ code, path, category, status, media_files, warnings, title, actors }]);
+    const { code, path, category, status, media_files, warnings, title, actors, poster } = work;
+    mergeWorks([{ code, path, category, status, media_files, warnings, title, actors, poster }]);
     setActorRevision((value) => value + 1);
   }, [mergeWorks]);
   const refreshTasks = useCallback(async (poll = false) => {
@@ -293,7 +293,6 @@ function App() {
               <Library
                 works={works}
                 configured={settings.configured}
-                busy={busy}
                 tasksChanged={refreshTasks}
                 refresh={refresh}
                 run={run}
@@ -311,6 +310,7 @@ function App() {
               }
               works={works}
               refresh={async () => setActorRevision((value) => value + 1)}
+              tasksChanged={refreshTasks}
               run={run}
               navigate={(next) => run(() => navigate(next))}
             />

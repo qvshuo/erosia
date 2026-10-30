@@ -17,7 +17,6 @@ const idle = {
   phase: "",
   message: "",
   elapsed: undefined,
-  action: "刮削",
   label: undefined,
 };
 
@@ -27,7 +26,7 @@ export function sourceProgress(
   now = Date.now(),
 ) {
   const process = detail.process;
-  if (process?.type === "retry_incomplete") return idle;
+  if (process?.type === "update_portraits") return idle;
   const active = process?.status === "running" || process?.status === "pending";
   const current = detail.variants?.find((item) => item.source === source);
   const stored = process?.result?.sources?.find(
@@ -69,9 +68,7 @@ export function sourceProgress(
     finished ??
     (started
       ? events.at(-1)
-      : events.findLast(
-          (item) => item.stage === "wait",
-        ));
+      : events.findLast((item) => item.stage === "wait"));
   const status =
     result?.status ??
     finished?.status ??
@@ -118,7 +115,11 @@ export function sourceProgress(
     if (event?.stage === "wait") {
       const cooldown = event.message?.match(/^冷却 (\d+) 秒$/);
       if (cooldown) {
-        const remaining = Math.max(0, Number(cooldown[1]) - Math.floor((now - Date.parse(event.time)) / 1000));
+        const remaining = Math.max(
+          0,
+          Number(cooldown[1]) -
+            Math.floor((now - Date.parse(event.time)) / 1000),
+        );
         label = remaining > 0 ? "冷却中" : "等待中";
         message = remaining > 0 ? `冷却 ${remaining} 秒` : "等待来源可用";
       } else {
@@ -132,11 +133,13 @@ export function sourceProgress(
           ? event.message === "打开网页"
             ? "改用网页"
             : event.message || ""
-          : phases[event?.stage ?? ""] ?? "";
+          : (phases[event?.stage ?? ""] ?? "");
       if (event?.stage === "retry") message = "网络请求失败";
     }
   } else if (status !== "missing") {
-    message = result?.message ? errorText(result.message) : outcomes[status] || "";
+    message = result?.message
+      ? errorText(result.message)
+      : outcomes[status] || "";
   } else if (started && !active) {
     message = "未记录来源结果";
   }
@@ -147,11 +150,5 @@ export function sourceProgress(
     status === "missing"
   )
     elapsed = undefined;
-  const action =
-    status === "found"
-      ? "重新刮削"
-      : ["missing", "pending", "running"].includes(status)
-        ? "刮削"
-        : "重试";
-  return { status, phase, message, elapsed, action, label };
+  return { status, phase, message, elapsed, label };
 }

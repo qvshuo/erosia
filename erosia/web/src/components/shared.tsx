@@ -5,8 +5,17 @@ import {
   type ComponentProps,
   type MouseEvent,
   type KeyboardEvent,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Search,
+  LayoutGrid,
+  List,
+} from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,15 +44,15 @@ export function SummaryHeader({
   suffix = "",
   children,
 }: {
-  count: number;
+  count?: number;
   unit: string;
   suffix?: string;
   children?: ReactNode;
 }) {
   return (
-    <div className="flex min-h-9 items-center justify-between gap-3">
+    <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
       <p className="text-base leading-6 font-medium tabular-nums">
-        {count} {unit}
+        {count ?? "—"} {unit}
         {suffix}
       </p>
       {children}
@@ -196,22 +205,108 @@ export function Pagination({
     </div>
   );
 }
-export function TranslationOriginal({ label, text }: { label: string; text?: string }) {
+export function TranslationOriginal({
+  label,
+  text,
+}: {
+  label: string;
+  text?: string;
+}) {
   return (
     <Dialog>
-      <DialogTrigger asChild><Button type="button" variant="ghost" size="xs" aria-label={`查看${label}原文`}>译</Button></DialogTrigger>
-      <DialogContent aria-describedby={undefined} className="max-h-[85dvh] overflow-y-auto">
-        <DialogHeader><DialogTitle>{label}原文</DialogTitle></DialogHeader>
-        <p className="whitespace-pre-wrap break-words text-sm">{text ?? "未保留原文"}</p>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          aria-label={`查看${label}原文`}
+        >
+          译
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        aria-describedby={undefined}
+        className="max-h-[85dvh] overflow-y-auto"
+      >
+        <DialogHeader>
+          <DialogTitle>{label}原文</DialogTitle>
+        </DialogHeader>
+        <p className="whitespace-pre-wrap break-words text-sm">
+          {text ?? "未保留原文"}
+        </p>
       </DialogContent>
     </Dialog>
   );
 }
 
-export function ArtworkImage({ src, alt, className, ...props }: ComponentProps<"img">) {
+export function ArtworkImage({
+  src,
+  alt,
+  className,
+  ...props
+}: ComponentProps<"img">) {
   const [failed, setFailed] = useState<string>();
-  if (src && failed === src) return <span role="img" aria-label={`${alt ?? "图片"}加载失败`} title="图片加载失败，请刷新重试" className={cn("inline-flex items-center justify-center whitespace-normal bg-muted p-2 text-xs text-destructive", className)}>加载失败</span>;
-  return <img {...props} className={className} src={src} alt={alt} onError={(event) => { setFailed(typeof src === "string" ? src : undefined); props.onError?.(event); }} />;
+  if (src && failed === src)
+    return (
+      <span
+        role="img"
+        aria-label={`${alt ?? "图片"}加载失败`}
+        title="图片加载失败，请刷新重试"
+        className={cn(
+          "inline-flex items-center justify-center whitespace-normal bg-muted p-2 text-xs text-destructive",
+          className,
+        )}
+      >
+        加载失败
+      </span>
+    );
+  return (
+    <img
+      {...props}
+      className={className}
+      src={src}
+      alt={alt}
+      onError={(event) => {
+        setFailed(typeof src === "string" ? src : undefined);
+        props.onError?.(event);
+      }}
+    />
+  );
+}
+
+export function ImageViewer({
+  src,
+  title,
+  close,
+}: {
+  src: string;
+  title: string;
+  close: () => void;
+}) {
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) close();
+      }}
+    >
+      <DialogContent
+        aria-describedby={undefined}
+        className="h-[90dvh] grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-4xl"
+      >
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div className="flex min-h-0 items-center justify-center overflow-hidden">
+          <ArtworkImage
+            src={src}
+            alt={title}
+            className="h-full w-full object-contain"
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 export function Empty({ children = "暂无记录" }: { children?: ReactNode }) {
@@ -271,6 +366,66 @@ export function useDebounce<T>(value: T, delay = 250): T {
     return () => clearTimeout(timer);
   }, [value, delay]);
   return settled;
+}
+
+export type ViewMode = "list" | "grid";
+export function ViewToggle({
+  value,
+  onChange,
+}: {
+  value: ViewMode;
+  onChange: (value: ViewMode) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="查看方式"
+      className="inline-flex shrink-0 gap-0.5 rounded-md border p-0.5"
+    >
+      {(
+        [
+          ["list", "列表", List],
+          ["grid", "大图", LayoutGrid],
+        ] as const
+      ).map(([mode, label, Icon]) => (
+        <Button
+          key={mode}
+          type="button"
+          variant={value === mode ? "secondary" : "ghost"}
+          size="icon-sm"
+          aria-label={label}
+          aria-pressed={value === mode}
+          onClick={() => onChange(mode)}
+        >
+          <Icon />
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+export function useListState<T extends object>(
+  key: string,
+  initial: T,
+): [T, Dispatch<SetStateAction<T>>] {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      return {
+        ...initial,
+        ...JSON.parse(sessionStorage.getItem(`erosia:${key}`) ?? "{}"),
+      };
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(`erosia:${key}`, JSON.stringify(value));
+    } catch {
+      /* List preferences remain usable when browser storage is unavailable. */
+    }
+  }, [key, value]);
+  return [value, setValue];
 }
 export interface Confirmation {
   title: string;
@@ -335,4 +490,58 @@ export function WorkTitle({ title }: { title?: string | null }) {
       {title || "—"}
     </span>
   );
+}
+
+export function useSelection() {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  return {
+    selected,
+    toggle(keys: string[], checked: boolean) {
+      setSelected((old) => {
+        const next = new Set(old);
+        keys.forEach((key) => (checked ? next.add(key) : next.delete(key)));
+        return next;
+      });
+    },
+    clear() {
+      setSelected(new Set());
+    },
+  };
+}
+export function SelectionCheckbox({
+  keys,
+  selected,
+  toggle,
+  label,
+}: {
+  keys: string[];
+  selected: Set<string>;
+  toggle: (keys: string[], checked: boolean) => void;
+  label: string;
+}) {
+  return (
+    <Checkbox
+      aria-label={label}
+      disabled={!keys.length}
+      checked={
+        keys.length && keys.every((key) => selected.has(key))
+          ? true
+          : keys.some((key) => selected.has(key))
+            ? "indeterminate"
+            : false
+      }
+      onCheckedChange={(checked) => toggle(keys, checked === true)}
+    />
+  );
+}
+export function ClearSelection({
+  selection,
+}: {
+  selection: ReturnType<typeof useSelection>;
+}) {
+  return selection.selected.size ? (
+    <Button variant="ghost" size="sm" onClick={selection.clear}>
+      清除选择
+    </Button>
+  ) : null;
 }

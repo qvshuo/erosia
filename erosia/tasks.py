@@ -3,20 +3,22 @@ import fcntl
 import logging
 import sqlite3
 import uuid
+from collections import Counter
 from typing import Literal
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .actors import ActorAliases
+from .actors import ActorAliases, library_actors
 from .catalog import CatalogRules
 from .engine import Scraper
 from .images import Gfriends
 from .http import WebClient
 from .logging import progress, work_code
 from .logging import task_id as log_task_id
-from .models import Category, SourceId, ScrapeRequest
-from .nfo import existing_nfo, nfo_paths, read_nfo
-from .processing import process_work, retry_work, retry_task_report
+from .models import Actor, Category
+from .nfo import existing_nfo, media_stems, nfo_paths, read_nfo, target_folder
+from .processing import complete_report, process_work, retry_work, retry_task_report
 from .runtime import RuntimeStore, now, runtime_directory
 from .scanner import scan, validate_roots
 from .settings import Settings
@@ -29,13 +31,11 @@ class TaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal[
         "fill_missing",
-        "fetch_source",
         "refresh",
-        "retry_incomplete",
+        "update_portraits",
     ]
     codes: list[str] = Field(default_factory=list)
-    source_id: SourceId | None = None
-    retry_stages: list[Literal["images", "translation", "portraits"]] = Field(default_factory=list)
+    actor_names: list[str] = Field(default_factory=list)
     retry_only: bool = False
 
 
@@ -72,6 +72,7 @@ class TaskQueue:
         self._run_lock = asyncio.Lock()
         self._work_locks = {}
         self._running_codes = set()
+        self._pending_counts = Counter()
         self.pending_settings = None
         self.on_idle = None
         self.scraper_factory = scraper_factory
@@ -121,6 +122,7 @@ class TaskQueue:
 
     def _apply_result(self, work, result):
         work.title, work.actors = None, []
+        work.poster = None
         work.warnings = [warning for warning in work.warnings if warning != "NFO 无效，等待补抓"]
         work.status = "failed" if result.get("status") not in (None, "found", "unchanged") else "pending"
         if existing_nfo(self.output, work).is_file():
@@ -132,6 +134,31 @@ class TaskQueue:
             except (ValueError, OSError):
                 work.title, work.actors = None, []
                 work.warnings.append("NFO 无效，等待补抓")
+        folder = target_folder(self.output, work.code)
+        stems = {stem + "-poster" for stem in media_stems(work)}
+        try:
+            posters = sorted(folder.iterdir())
+        except OSError:
+            posters = []
+        for poster in posters:
+            if poster.stem not in stems or poster.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                continue
+            try:
+                if poster.is_symlink() or not poster.is_file():
+                    continue
+                stat = poster.stat()
+            except OSError:
+                # Artwork can be replaced while a scan reads its thumbnail projection.
+                continue
+            work.poster = f"/api/works/{quote(work.code, safe='')}/artwork?file={quote(poster.name, safe='')}&v={stat.st_mtime_ns}-{stat.st_size}"
+            break
+
+    def _queue_status(self, work):
+        if work.status not in ("invalid_key", "conflict"):
+            if self.work_running(work.code):
+                work.status = "running"
+            elif self._pending_counts[work.code]:
+                work.status = "queued"
 
     def _scan_rows(self, options, results, previous, persist):
         works = scan(options.media_directories)
@@ -141,36 +168,48 @@ class TaskQueue:
                 result = results.get(work.code, {})
                 work.category = Category(result.get("category", rules.classify(work.code).category))
                 self._apply_result(work, result)
+                self._queue_status(work)
             elif persist and (str(work.path), work.code, work.status) not in previous:
                 logger.warning("跳过 %s：%s", work.code, "; ".join(work.warnings))
         return works
 
     def refresh_work(self, code):
-        work = self.runtime.work(code)
-        queued = work.status == "queued"
-        self._apply_result(work, self.runtime.results.get(code, {}))
-        if queued and any(item["code"] == code and item["status"] == "pending"
-                          for task in self.runtime.task_data.values()
-                          if task["status"] in ("pending", "running") for item in task["items"]):
-            work.status = "queued"
+        try:
+            work = self.runtime.work(code)
+        except ValueError:
+            return
+        if not self.work_running(code):
+            self._apply_result(work, self.runtime.results.get(code, {}))
+        self._queue_status(work)
         self.runtime.update_work(work)
 
     async def scan_async(self, *, settings=None, persist=True):
-        if self.active():
-            raise ValueError("cannot scan while a task is active")
         options, results = settings or self.settings, self.runtime.results
-        previous = {(m["path"], m["code"], m["status"]) for m in self.runtime.works()}
+        before = {row["path"]: row for row in self.runtime.works()}
+        previous = {(m["path"], m["code"], m["status"]) for m in before.values()}
         works = await asyncio.to_thread(self._scan_rows, options, results, previous, persist)
-        if self.active():
-            raise ValueError("cannot scan while a task is active")
-        # Do not publish an old filesystem snapshot after a write or configuration switch.
         if persist:
-            if (
-                self.closed
-                or options is not self.settings
-                or results is not self.runtime.results
-            ):
+            if self.closed or options is not self.settings:
                 return self.runtime.works()
+            # Running works retain their identity; completed writes beat the scan's older snapshot.
+            running = set(self._running_codes)
+            for code in running:
+                current = self.runtime.works(codes=[code])
+                scanned = [work for work in works if work.code == code]
+                # Keep newly discovered conflicts visible, even while the original work finishes.
+                if len(current) == 1 and current[0]["status"] not in ("invalid_key", "conflict") and not any(work.status == "conflict" for work in scanned):
+                    works = [work for work in works if work.code != code]
+                    works.append(self.runtime.work(code))
+            for work in works:
+                current = self.runtime.work_at(str(work.path))
+                if current and work.status not in ("invalid_key", "conflict") and (
+                    current != before.get(str(work.path))
+                    or results.get(work.code) != self.runtime.results.get(work.code)
+                ):
+                    for field in ("title", "actors", "poster", "status", "category", "warnings"):
+                        setattr(work, field, Category(current[field]) if field == "category" else current[field])
+                self._queue_status(work)
+            works.sort(key=lambda work: str(work.path))
             self.runtime.save_scan(works)
         return [work.model_dump(mode="json") for work in works]
 
@@ -178,27 +217,28 @@ class TaskQueue:
         if self.task_lock.locked() and not self.active():
             raise ValueError("cannot create tasks while metadata is being edited")
         validate_roots(self.settings.media_directories, self.output)
-        if request.type == "fetch_source" and request.source_id is None:
-            raise ValueError("fetch_source requires source_id")
-        if request.type == "fetch_source" and len(request.codes) != 1:
-            raise ValueError("单源刮削需要指定一个作品")
         eligible = {
             m["code"]
             for m in self.runtime.works()
             if m["status"] not in ("invalid_key", "conflict")
         }
+        if request.type == "update_portraits":
+            actors = library_actors([self.runtime.work(code) for code in eligible], self.output,
+                                   ActorAliases.load(self.settings.actor_aliases_file))
+            eligible_actors = {actor["name"]: actor for actor in actors if actor["portrait_eligible"]}
+            selected_names = set(request.actor_names) if request.actor_names else set(eligible_actors)
+            if not selected_names or selected_names - eligible_actors.keys():
+                raise ValueError("no eligible actors or requested actor is unavailable")
+            eligible = {code for name in selected_names for code in eligible_actors[name]["codes"]}
+        elif request.actor_names:
+            raise ValueError("actor_names is only supported for portrait updates")
         keys = sorted(set(request.codes) if request.codes else eligible)
         if not keys or any(k not in eligible for k in keys):
             raise ValueError("no eligible works or requested directory is invalid/conflicting")
-        if request.type != "fetch_source" and request.source_id is not None:
-            raise ValueError("批次使用已配置的来源顺序")
         params = request.model_dump(mode="json")
         params["codes"] = keys
-        for task in self.active():
-            if task["params"] == params:
-                return self.runtime.task(task["id"])
-            if set(keys) & set(task["params"]["codes"]):
-                raise ValueError("task overlaps an active write task")
+        if request.type == "update_portraits":
+            params["actor_names"] = sorted(selected_names)
         ident = uuid.uuid4().hex
         task = {
             "id": ident,
@@ -221,7 +261,9 @@ class TaskQueue:
             item.update(stage=dict(queued), events=[dict(queued)])
         self.runtime.save_task(task)
         for item in task["items"]:
-            self.runtime.work_row(item["code"])["status"] = "queued"
+            self._pending_counts[item["code"]] += 1
+            if not self.work_running(item["code"]):
+                self.runtime.work_row(item["code"])["status"] = "queued"
         worker = asyncio.create_task(self.run(ident))
         self.running[ident] = worker
         worker.add_done_callback(lambda _: self.running.pop(ident, None))
@@ -244,6 +286,8 @@ class TaskQueue:
             await asyncio.gather(worker, return_exceptions=True)
         for item in task["items"]:
             if item["status"] in ("pending", "running"):
+                if item["status"] == "pending":
+                    self._pending_counts[item["code"]] -= 1
                 item.update(status="cancelled", result=None)
                 event = {
                     "stage": "finished",
@@ -256,10 +300,8 @@ class TaskQueue:
                 item["stage"] = event
         task.update(status="cancelled", finished_at=now(), current=None)
         self.runtime.save_task(task)
-        active_keys = {key for other in self.active() for key in other["params"]["codes"]}
         for code in task["params"]["codes"]:
-            if code not in active_keys:
-                self.refresh_work(code)
+            self.refresh_work(code)
         result = self.runtime.task(ident)
         if not self.closed and not self.active() and self.on_idle:
             await self.on_idle()
@@ -289,7 +331,8 @@ class TaskQueue:
         try:
             async with self.task_lock:
                 await self.apply_pending_settings()
-            await self.translator.verify(force=True)
+            if request.type != "update_portraits":
+                await self.translator.verify(force=True)
             names = ActorAliases.load(self.settings.actor_aliases_file)
             self.runtime.save_issues(names.pending(self.runtime.issues))
             async with self.scraper_factory(self.settings) as scraper, Gfriends(self.settings, names, self.output) as portraits:
@@ -303,11 +346,12 @@ class TaskQueue:
                             await process_locked_item(item)
                         finally:
                             self._running_codes.discard(item["code"])
+                            self.refresh_work(item["code"])
 
                 async def process_locked_item(item):
                     work_code.set(item["code"])
+                    self._pending_counts[item["code"]] -= 1
                     item.update(status="running", attempts=item["attempts"] + 1)
-                    self.runtime.work_row(item["code"])["status"] = "running"
                     self.runtime.save_task(task, item)
 
                     def update_progress(event):
@@ -320,25 +364,26 @@ class TaskQueue:
                         self.runtime.save_task(task, item)
 
                     previous = self.runtime.results.get(item["code"], {})
-                    repairing = request.type == "retry_incomplete" or request.retry_only and previous.get("partial")
-                    repair_stages = request.retry_stages or previous.get("incomplete_stages", [])
+                    repairing = request.type != "update_portraits" and request.retry_only and previous.get("partial")
+                    repair_stages = previous.get("incomplete_stages", [])
                     token = progress.set(update_progress)
                     try:
-                        report = await self.process(scraper, self.runtime.work(item["code"]), names, request, portraits)
+                        work = self.runtime.work(item["code"])
+                        self.runtime.work_row(item["code"])["status"] = "running"
+                        report = await self.process(scraper, work, names, request, portraits)
                     except Exception as exc:
                         logger.exception("处理 %s 失败", item["code"])
                         report = {"code": item["code"], "status": "error", "error": str(exc)}
                     finally:
                         progress.reset(token)
-                    if self.settings.translation.enabled and not self.translator.available:
+                    if request.type != "update_portraits" and self.settings.translation.enabled and not self.translator.available:
                         report["warnings"] = [*report.get("warnings", []), "翻译服务不可用：" + self.translator.validation_error]
                     task_report = retry_task_report(report, repair_stages) if repairing else report
                     outcome = "partial" if task_report.get("partial") else "success" if task_report["status"] in ("found", "unchanged") else "failed"
                     item.update(status=outcome, result=task_report)
                     # A failed attempt does not replace the health of unchanged output files.
-                    if request.type != "fetch_source" and (report["status"] in ("found", "unchanged") or not self.runtime.results.get(item["code"])):
+                    if request.type != "update_portraits" and (report["status"] in ("found", "unchanged") or not self.runtime.results.get(item["code"])):
                         self.runtime.record_result(item["code"], report)
-                    self.refresh_work(item["code"])
                     update_progress({"stage": "finished", "status": outcome, "source": None,
                                      "message": None, "time": now()})
                     logger.info("番号 %s：%s", item["code"], report["status"])
@@ -355,6 +400,8 @@ class TaskQueue:
             logger.exception("任务 %s 失败", ident)
             for item in task["items"]:
                 if item["status"] in ("pending", "running"):
+                    if item["status"] == "pending":
+                        self._pending_counts[item["code"]] -= 1
                     event = {"stage": "finished", "status": "failed", "source": None,
                              "message": str(exc), "time": now()}
                     item.update(status="failed", result={"code": item["code"], "status": "error", "error": str(exc)}, stage=event)
@@ -366,13 +413,20 @@ class TaskQueue:
         self.runtime.save_task(task)
 
     async def process(self, scraper, work, names, request, portraits):
-        if request.type == "fetch_source":
-            result = await scraper.scrape(ScrapeRequest(code=work.code, source=request.source_id),
-                on_result=lambda variant: self.runtime.save_variant(work.code, variant.model_dump(mode="json")))
-            return {"code": work.code, "status": result.status.value, "warnings": result.warnings,
-                "sources": [v.report() for v in result.results]}
-        if request.type == "retry_incomplete" or (request.retry_only and self.runtime.results.get(work.code, {}).get("partial")):
-            stages = request.retry_stages or self.runtime.results.get(work.code, {}).get("incomplete_stages", [])
+        if request.type == "update_portraits":
+            actors = dict.fromkeys(actor.name for path in nfo_paths(self.output, work)
+                                   for actor in read_nfo(path, work.code).actors
+                                   if actor.name in request.actor_names)
+            records = await portraits.save([Actor(name=name) for name in actors], replace=True)
+            failed = any(record["status"] == "error" for record in records)
+            report = complete_report({"code": work.code, "status": "error" if failed else "found", "portraits": records,
+                                      "stages": {"portraits": "failed" if failed else "success"}})
+            report["partial"] = failed and any(record["status"] in ("saved", "existing") for record in records)
+            if failed:
+                report["error"] = "部分头像更新失败" if report["partial"] else "头像更新失败"
+            return report
+        if request.retry_only and self.runtime.results.get(work.code, {}).get("partial"):
+            stages = self.runtime.results.get(work.code, {}).get("incomplete_stages", [])
             if not stages:
                 raise ValueError("没有待重试阶段")
             return await retry_work(scraper, work, self.output, self.translator, self.runtime, portraits, stages)

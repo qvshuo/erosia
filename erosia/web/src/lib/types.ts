@@ -1,6 +1,7 @@
 export interface Work {
   title?: string | null;
   actors?: string[];
+  poster?: string | null;
   code: string;
   path: string;
   category: string;
@@ -109,7 +110,7 @@ export interface Task {
   skipped: number;
   partial?: number;
   error?: string | null;
-  params?: { codes?: string[]; source_id?: string };
+  params?: { codes?: string[]; actor_names?: string[] };
 }
 export interface TaskDetail extends Task {
   items: TaskItem[];

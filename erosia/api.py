@@ -335,11 +335,9 @@ def create_app(
                     artwork.append(image.name)
                     artwork_versions[image.name] = f"{version.st_mtime_ns}-{version.st_size}"
         tasks = ([service.runtime.task_data[task_id]] if task_id in service.runtime.task_data else []) if task_id else sorted(service.runtime.task_data.values(), key=lambda t: t["created_at"], reverse=True)
-        process = next(({"task_id": t["id"], "type": t["type"], "sequence": t.get("sequence"), "created_at": t["created_at"], "finished_at": t.get("finished_at"), "requested_source": t["params"].get("source_id"), **item} for t in tasks for item in t["items"] if item["code"] == row["code"]), None)
+        process = next(({"task_id": t["id"], "type": t["type"], "sequence": t.get("sequence"), "created_at": t["created_at"], "finished_at": t.get("finished_at"), **item} for t in tasks for item in t["items"] if item["code"] == row["code"]), None)
         route_sources = service.settings.routes[row["category"]]
         if process:
-            if source := process.get("requested_source"):
-                route_sources = [source]
             if sources := (process.get("result") or {}).get("sources"):
                 route_sources = [source["source"] for source in sources]
         selection = service.runtime.selection(row["code"])
@@ -570,17 +568,27 @@ def create_app(
             "cancelled",
             "skipped",
             "partial",
+            "todo",
+            "done",
         ):
             raise HTTPException(422, "invalid task result filter")
         items = sorted(
             record.pop("items"),
             key=lambda item: (item["status"] != "failed", item["code"]),
         )
+        groups = {"todo": {"pending", "failed", "partial", "cancelled"}, "done": {"success", "skipped"}}
+        search = query.casefold()
+        def matches_query(item):
+            if not search:
+                return True
+            rows = runner().runtime.works(codes=[item["code"]])
+            row = rows[0] if len(rows) == 1 else {}
+            return search in " ".join([item["code"], row.get("title") or "", row.get("path") or "", *row.get("actors", [])]).casefold()
         items = [
             item
             for item in items
-            if (status == "all" or item["status"] == status)
-            and query.casefold() in item["code"].casefold()
+            if (status == "all" or item["status"] in groups.get(status, {status}))
+            and matches_query(item)
         ]
         pages = max(1, (len(items) + page_size - 1) // page_size)
         page = min(page, pages)

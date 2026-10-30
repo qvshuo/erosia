@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import ReactCrop, { type PercentCrop } from "react-image-crop";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,11 +20,20 @@ import { cropBox, percentCrop } from "@/lib/crop";
 import type { Box, Crop, ImageChoice } from "@/lib/types";
 
 export default function CropEditor({
-  code, input, image, applyLabel, coverPreview, busy, close, applied,
+  code,
+  input,
+  image,
+  originalImage,
+  applyLabel,
+  coverPreview,
+  busy,
+  close,
+  applied,
 }: {
   code: string;
   input: ImageChoice;
   image: string;
+  originalImage: string;
   applyLabel: "应用裁剪" | "设为封面";
   coverPreview?: string;
   busy: boolean;
@@ -27,6 +42,31 @@ export default function CropEditor({
 }) {
   const [result, setResult] = useState<Crop | null>(null);
   const [loadedImage, setLoadedImage] = useState<string>();
+  const [showOriginal, setShowOriginal] = useState(false);
+  const displayImage = showOriginal ? originalImage : image;
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null);
+  const [bounds, setBounds] = useState({ width: 0, height: 0 });
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  useLayoutEffect(() => {
+    if (!frame) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry)
+        setBounds({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        });
+    });
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, [frame]);
+  const scale =
+    dimensions.width && dimensions.height
+      ? Math.min(
+          1,
+          bounds.width / dimensions.width,
+          bounds.height / dimensions.height,
+        )
+      : 0;
   const [selection, setSelection] = useState<PercentCrop>();
   const [pending, setPending] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -35,20 +75,22 @@ export default function CropEditor({
   const controller = useRef<AbortController | null>(null);
   const base = `works/${encodeURIComponent(code)}/crop`;
   const preview = useCallback(
-    async (body: {
-      center?: boolean;
-      box?: Box;
-      fingerprint?: string;
-    }) => {
+    async (body: { center?: boolean; box?: Box; fingerprint?: string }) => {
       controller.current?.abort();
       const abort = new AbortController();
       controller.current = abort;
       const ticket = ++request.current;
       setPending(true);
+      setShowOriginal(true);
       setConfirmed(false);
       setError("");
       try {
-        const value = await api<Crop>(base, "POST", { ...input, ...body }, abort.signal);
+        const value = await api<Crop>(
+          base,
+          "POST",
+          { ...input, ...body },
+          abort.signal,
+        );
         if (abort.signal.aborted || ticket !== request.current) return;
         setResult(value);
         setSelection(percentCrop(value.box, value.width, value.height));
@@ -69,12 +111,13 @@ export default function CropEditor({
     setConfirmed(false);
     setPending(false);
     setError("");
+    setShowOriginal(false);
     return () => {
       controller.current?.abort();
       request.current++;
     };
   }, [input]);
-  const locked = busy || loadedImage !== image;
+  const locked = busy || loadedImage !== displayImage;
   return (
     <Dialog
       open
@@ -84,7 +127,7 @@ export default function CropEditor({
     >
       <DialogContent
         aria-describedby={undefined}
-        className="h-[90dvh] max-h-[90dvh] grid-rows-[auto_auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden sm:max-w-4xl"
+        className="h-[90dvh] max-h-[90dvh] grid-rows-[auto_auto_minmax(0,1fr)_auto_auto] overflow-hidden sm:max-w-4xl"
       >
         <DialogHeader>
           <DialogTitle>调整封面</DialogTitle>
@@ -105,9 +148,11 @@ export default function CropEditor({
             居中裁剪
           </Button>
         </div>
-        <p className="text-sm text-muted-foreground">{busy ? "作品处理中，暂不能修改" : loadedImage !== image ? error ? "请返回后重新打开图片" : "正在加载原图…" : "先选择裁剪方式，再调整选区"}</p>
-        <div className="grid min-h-0 items-start gap-4 overflow-auto sm:grid-cols-[1fr_140px]">
-          <div className="min-w-0 rounded-md border bg-muted/30 p-2">
+        <div className="grid min-h-0 gap-4 sm:grid-cols-[minmax(0,1fr)_140px]">
+          <div
+            ref={setFrame}
+            className="flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-md border bg-muted/30 p-2"
+          >
             <ReactCrop
               crop={selection}
               aspect={2 / 3}
@@ -142,20 +187,37 @@ export default function CropEditor({
               }}
             >
               <ArtworkImage
-                src={image}
-                onLoad={() => setLoadedImage(image)}
-                onError={() => { setLoadedImage(undefined); setError("原图加载失败，请返回后重试"); }}
+                src={displayImage}
+                onLoad={(event) => {
+                  setLoadedImage(displayImage);
+                  setDimensions({
+                    width: event.currentTarget.naturalWidth,
+                    height: event.currentTarget.naturalHeight,
+                  });
+                }}
+                onError={() => {
+                  setLoadedImage(undefined);
+                  setError("原图加载失败，请返回后重试");
+                }}
                 alt="裁剪原图"
-                className="block max-h-[55dvh] max-w-full object-contain"
+                className="block max-h-full max-w-full object-contain"
+                style={
+                  scale > 0
+                    ? {
+                        width: dimensions.width * scale,
+                        height: dimensions.height * scale,
+                      }
+                    : undefined
+                }
                 draggable={false}
               />
             </ReactCrop>
           </div>
           {(result || coverPreview) && (
-            <div className="space-y-2">
+            <div className="hidden min-h-0 flex-col items-center gap-2 sm:flex">
               <ArtworkImage
                 src={result?.preview ?? coverPreview}
-                className="mx-auto aspect-[2/3] w-32 rounded-md"
+                className="max-h-[calc(100%-1.5rem)] w-auto max-w-32 rounded-md object-contain"
                 alt="裁剪预览"
               />
               <p className="text-center text-xs text-muted-foreground">
@@ -168,13 +230,24 @@ export default function CropEditor({
           role={error ? "alert" : "status"}
           className={`min-h-5 break-words text-sm ${error ? "text-destructive" : "text-muted-foreground"}`}
         >
-          {error || (pending ? "正在生成预览…" : "\u00a0")}
+          {error ||
+            (busy
+              ? "作品处理中，暂不能修改"
+              : pending
+                ? "正在生成预览…"
+                : loadedImage !== displayImage
+                  ? "正在加载图片…"
+                  : "\u00a0")}
         </p>
         <div className="flex justify-end gap-3">
-          <Button variant="outline" onClick={close}>返回</Button>
+          <Button variant="outline" onClick={close}>
+            返回
+          </Button>
           <Button
             disabled={locked || pending || !confirmed || !result || !!error}
-            onClick={() => { if (result && confirmed) applied(result); }}
+            onClick={() => {
+              if (result && confirmed) applied(result);
+            }}
           >
             {applyLabel}
           </Button>

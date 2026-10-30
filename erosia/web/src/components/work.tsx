@@ -1,10 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useEffect,
-  useEffectEvent,
-  useState,
-} from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +12,13 @@ import {
   type Draft,
   type FieldKey,
 } from "@/lib/metadata";
-import type { Crop, ImageChoice, Variant, WorkDetail, Work as WorkRecord } from "@/lib/types";
+import type {
+  Crop,
+  ImageChoice,
+  Variant,
+  WorkDetail,
+  Work as WorkRecord,
+} from "@/lib/types";
 import {
   ArtworkImage,
   TranslationOriginal,
@@ -63,7 +63,13 @@ export function Work({
   const [savedNotice, setSavedNotice] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [pending, setPending] = useState<"save" | "prepare" | null>(null);
-  const [cropImage, setCropImage] = useState<{ role: string; choice: ImageChoice; url: string; coverPreview?: string } | null>(null);
+  const [cropImage, setCropImage] = useState<{
+    role: string;
+    choice: ImageChoice;
+    url: string;
+    originalUrl: string;
+    coverPreview?: string;
+  } | null>(null);
   const [mode, setMode] = useState("fill_missing");
   const changed =
     !!editor &&
@@ -105,8 +111,16 @@ export function Work({
     const controller = new AbortController();
     run(async () => {
       try {
-        const value = await api<WorkDetail>(`works/detail?path=${encodeURIComponent(path)}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`, "GET", undefined, controller.signal);
-        if (!controller.signal.aborted) { receive(value); setLoadFailed(false); }
+        const value = await api<WorkDetail>(
+          `works/detail?path=${encodeURIComponent(path)}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ""}`,
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (!controller.signal.aborted) {
+          receive(value);
+          setLoadFailed(false);
+        }
       } catch (error) {
         if (!controller.signal.aborted) setLoadFailed(true);
         throw error;
@@ -118,13 +132,19 @@ export function Work({
     reportEdit({ dirty: changed, saving: !!pending });
     return () => reportEdit({ dirty: false, saving: false });
   }, [changed, pending, reportEdit]);
-  if (!editor) return <Empty>{loadFailed ? "作品读取失败，请重新进入" : "正在读取作品…"}</Empty>;
+  if (!editor)
+    return (
+      <Empty>{loadFailed ? "作品读取失败，请重新进入" : "正在读取作品…"}</Empty>
+    );
   const { detail, draft } = editor;
   const base = `works/${encodeURIComponent(detail.code)}`;
   const updatedAt = detail.process?.events?.at(-1)?.time;
   const locked = !!pending || !detail.editable;
-  const processActive = ["pending", "running"].includes(detail.process?.status ?? "");
-  const scrapeLocked = locked || processActive || detail.status === "queued";
+  const processActive = ["pending", "running"].includes(
+    detail.process?.status ?? "",
+  );
+  const scrapeLocked =
+    !!pending || ["invalid_key", "conflict"].includes(detail.status);
   const variants = detail.variants ?? [];
   const route = detail.route_sources ?? variants.map((v) => v.source);
   const artwork = (file: string) =>
@@ -185,23 +205,20 @@ export function Work({
         : current,
     );
   }
-  async function scrape(source?: string) {
+  async function scrape() {
     await api("tasks", "POST", {
-      type: source ? "fetch_source" : mode,
+      type: mode,
       codes: [detail.code],
-      ...(source ? { source_id: source } : {}),
     });
     await refresh();
   }
   async function save() {
     const result = await api<WorkDetail>(`${base}/metadata`, "PUT", {
-        ...metadataForm(draft),
-        field_sources: editor!.fieldSources,
-        ...(editor!.sampleSource
-          ? { sample_source: editor!.sampleSource }
-          : {}),
-        image_choices: editor!.images,
-      });
+      ...metadataForm(draft),
+      field_sources: editor!.fieldSources,
+      ...(editor!.sampleSource ? { sample_source: editor!.sampleSource } : {}),
+      image_choices: editor!.images,
+    });
     accept(result);
     setSavedNotice(true);
     saved(result);
@@ -211,20 +228,46 @@ export function Work({
       .map((file) => [file.match(/-(poster|fanart\d*)\.[^.]+$/)?.[1], file])
       .filter(([role]) => role),
   );
-  const imageRoles = [...new Set([
-    ...Object.keys(imageFiles).filter((role) => !editor.sampleSource || !/^fanart\d+$/.test(role)),
-    ...Object.keys(editor.images),
-  ])];
+  const imageRoles = [
+    ...new Set([
+      ...Object.keys(imageFiles).filter(
+        (role) => !editor.sampleSource || !/^fanart\d+$/.test(role),
+      ),
+      ...Object.keys(editor.images),
+    ]),
+  ];
   const imageGroups = [
-    { key: "poster", label: "封面", roles: imageRoles.filter((role) => role === "poster") },
-    { key: "fanart", label: "封面原图", roles: imageRoles.filter((role) => role === "fanart") },
-    { key: "samples", label: "剧照", roles: imageRoles.filter((role) => /^fanart\d+$/.test(role)).sort((a, b) => Number(a.slice(6)) - Number(b.slice(6))) },
+    {
+      key: "poster",
+      label: "封面",
+      roles: imageRoles.filter((role) => role === "poster"),
+    },
+    {
+      key: "fanart",
+      label: "封面原图",
+      roles: imageRoles.filter((role) => role === "fanart"),
+    },
+    {
+      key: "samples",
+      label: "剧照",
+      roles: imageRoles
+        .filter((role) => /^fanart\d+$/.test(role))
+        .sort((a, b) => Number(a.slice(6)) - Number(b.slice(6))),
+    },
   ];
   function groupSource(group: (typeof imageGroups)[number]) {
-    if (group.key === "samples" && editor!.sampleSource) return editor!.sampleSource;
+    if (group.key === "samples" && editor!.sampleSource)
+      return editor!.sampleSource;
     if (group.key === "poster" && editor!.posterPreview) return "custom";
-    const values = new Set(group.roles.map((role) => editor!.images[role]?.source ??
-      detail.selection?.image_choices?.[role]?.source ?? detail.selection?.image_source ?? "unknown"));
+    const values = new Set(
+      group.roles.map(
+        (role) =>
+          editor!.images[role]?.source ??
+          detail.selection?.image_choices?.[role]?.source ??
+          detail.selection?.image_source ??
+          "unknown",
+      ),
+    );
     return values.size > 1 ? "mixed" : ([...values][0] ?? "unknown");
   }
   function chooseImageSource(group: string, source: string) {
@@ -232,16 +275,23 @@ export function Work({
     if (!items) return;
     const images = { ...editor!.images };
     if (group === "samples") {
-      for (const role of Object.keys(images)) if (/^fanart\d+$/.test(role)) delete images[role];
-      items.map((item, index) => ({ item, index })).filter(({ item }) => item.role === "sample")
-        .slice(0, 100).forEach(({ index }, i) => { images[`fanart${i + 1}`] = { source, index }; });
+      for (const role of Object.keys(images))
+        if (/^fanart\d+$/.test(role)) delete images[role];
+      items
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => item.role === "sample")
+        .slice(0, 100)
+        .forEach(({ index }, i) => {
+          images[`fanart${i + 1}`] = { source, index };
+        });
     } else {
       const index = items.findIndex((item) => item.role !== "sample");
       if (index < 0) return;
       images[group] = { source, index };
     }
     setEditor({
-      ...editor!, images,
+      ...editor!,
+      images,
       sampleSource: group === "samples" ? source : editor!.sampleSource,
       posterPreview: group === "poster" ? undefined : editor!.posterPreview,
     });
@@ -258,26 +308,50 @@ export function Work({
     return `/api/${base}/variants/${choice.source}/artwork?index=${choice.index}&poster=${poster}`;
   }
   function preview(role: string) {
-    if (role === "poster" && editor!.posterPreview) return editor!.posterPreview;
+    if (role === "poster" && editor!.posterPreview)
+      return editor!.posterPreview;
     const choice = editor!.images[role];
     if (choice) return imageUrl(choice, role === "poster");
     return imageFiles[role] ? artwork(imageFiles[role]!) : null;
   }
   function openCrop(role: string) {
-    const choice = editor!.images[role] ?? (imageFiles[role] ? { source: "custom", file: imageFiles[role] } : null);
+    const choice =
+      editor!.images[role] ??
+      (imageFiles[role] ? { source: "custom", file: imageFiles[role] } : null);
     if (!choice) return;
-    const { box: _, fingerprint: __, ...input } = choice;
-    setCropImage({ role, choice: input, url: imageUrl(input), coverPreview: preview("poster") ?? undefined });
+    const original =
+      role === "poster"
+        ? (editor!.images.fanart ??
+          (imageFiles.fanart
+            ? { source: "custom", file: imageFiles.fanart }
+            : choice))
+        : choice;
+    const { box: _, fingerprint: __, ...input } = original;
+    setCropImage({
+      role,
+      choice: input,
+      url: preview(role) ?? imageUrl(input),
+      originalUrl: imageUrl(input),
+      coverPreview: preview("poster") ?? undefined,
+    });
   }
   function applyCrop(choice: ImageChoice, crop: Crop) {
-    setEditor((current) => current ? {
-      ...current,
-      images: {
-        ...current.images,
-        poster: { ...choice, box: crop.box, fingerprint: crop.fingerprint },
-      },
-      posterPreview: crop.preview,
-    } : current);
+    setEditor((current) =>
+      current
+        ? {
+            ...current,
+            images: {
+              ...current.images,
+              poster: {
+                ...choice,
+                box: crop.box,
+                fingerprint: crop.fingerprint,
+              },
+            },
+            posterPreview: crop.preview,
+          }
+        : current,
+    );
     setCropImage(null);
   }
   const renderField = ([key, label, type]: (typeof fields)[number]) => {
@@ -293,7 +367,9 @@ export function Work({
     };
     if (!(source in options)) options[source] = sources[source] ?? source;
     const sourceVariant = variants.find((v) => v.source === source);
-    const fieldErrors = editor.fieldSources[key] ? sourceVariant?.translation_errors : detail.last_result?.translation_errors;
+    const fieldErrors = editor.fieldSources[key]
+      ? sourceVariant?.translation_errors
+      : detail.last_result?.translation_errors;
     const translated =
       source !== "custom" &&
       (editor.fieldSources[key]
@@ -315,8 +391,12 @@ export function Work({
       <div key={key} className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <label htmlFor={`metadata-${key}`} className="text-sm font-medium">{label}</label>
-            {translated && <TranslationOriginal label={label} text={original} />}
+            <label htmlFor={`metadata-${key}`} className="text-sm font-medium">
+              {label}
+            </label>
+            {translated && (
+              <TranslationOriginal label={label} text={original} />
+            )}
           </div>
           <Select
             label={`${label}来源`}
@@ -368,12 +448,12 @@ export function Work({
           </Button>
           <h2 className="text-xl font-semibold">{detail.code}</h2>
           <Status
-            status={
-              processActive
-                ? detail.process!.status
-                : detail.status
+            status={processActive ? detail.process!.status : detail.status}
+            label={
+              !processActive && detail.status === "pending"
+                ? "未刮削"
+                : undefined
             }
-            label={!processActive && detail.status === "pending" ? "未刮削" : undefined}
           />
           {updatedAt && (
             <time
@@ -412,31 +492,78 @@ export function Work({
       >
         <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="min-w-0 space-y-6">
-            {detail.warnings.length > 0 && <div role="status" className="space-y-1 rounded-lg border p-3 text-sm">{detail.warnings.map((warning) => <p key={warning}>{errorText(warning)}</p>)}</div>}
-            <Diagnostics report={detail.last_result} title="当前文件问题" active={detail.status === "running" || detail.status === "queued"} />
+            {detail.warnings.length > 0 && (
+              <div
+                role="status"
+                className="space-y-1 rounded-lg border p-3 text-sm"
+              >
+                {detail.warnings.map((warning) => (
+                  <p key={warning}>{errorText(warning)}</p>
+                ))}
+              </div>
+            )}
+            <Diagnostics
+              report={detail.last_result}
+              title="当前文件问题"
+              active={detail.status === "running" || detail.status === "queued"}
+            />
             {renderField(fields[0])}
             <section aria-label="作品图片" className="min-w-0 space-y-6">
               {imageGroups.map((group) => {
                 const current = groupSource(group);
-                const available = variants.filter((variant) => variant.status === "found" &&
-                  variant.metadata?.artwork?.some((item) => group.key === "samples" ? item.role === "sample" : item.role !== "sample"));
+                const available = variants.filter(
+                  (variant) =>
+                    variant.status === "found" &&
+                    variant.metadata?.artwork?.some((item) =>
+                      group.key === "samples"
+                        ? item.role === "sample"
+                        : item.role !== "sample",
+                    ),
+                );
                 return (
-                  <section key={group.key} aria-label={group.label} className="min-w-0 space-y-2">
+                  <section
+                    key={group.key}
+                    aria-label={group.label}
+                    className="min-w-0 space-y-2"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-sm font-medium">{group.label}</h3>
                       <Select
                         label={`${group.label}来源`}
                         value={current}
                         disabled={locked || !available.length}
-                        onChange={(source) => chooseImageSource(group.key, source)}
+                        onChange={(source) =>
+                          chooseImageSource(group.key, source)
+                        }
                         options={{
-                          [current]: sources[current] ?? (current === "custom" ? "自定义" : current === "mixed" ? "混合来源" : "来源未知"),
-                          ...Object.fromEntries(available.map((variant) => [variant.source, sources[variant.source]!])),
+                          [current]:
+                            sources[current] ??
+                            (current === "custom"
+                              ? "自定义"
+                              : current === "mixed"
+                                ? "混合来源"
+                                : "来源未知"),
+                          ...Object.fromEntries(
+                            available.map((variant) => [
+                              variant.source,
+                              sources[variant.source]!,
+                            ]),
+                          ),
                         }}
                       />
                     </div>
-                    {!available.length && <p className="text-sm text-muted-foreground">暂无可用来源候选</p>}
-                    <div className={group.key === "samples" ? "grid grid-cols-2 gap-4 sm:grid-cols-4" : "min-w-0"}>
+                    {!available.length && (
+                      <p className="text-sm text-muted-foreground">
+                        暂无可用来源候选
+                      </p>
+                    )}
+                    <div
+                      className={
+                        group.key === "samples"
+                          ? "grid grid-cols-2 gap-4 sm:grid-cols-4"
+                          : "min-w-0"
+                      }
+                    >
                       {group.roles.map((role) => {
                         const image = preview(role);
                         return image ? (
@@ -444,11 +571,22 @@ export function Work({
                             key={role}
                             type="button"
                             variant="artwork"
-                            size={role === "poster" ? "poster" : role === "fanart" ? "fanart" : "sample"}
+                            size={
+                              role === "poster"
+                                ? "poster"
+                                : role === "fanart"
+                                  ? "fanart"
+                                  : "sample"
+                            }
                             aria-label={`调整${imageLabel(role)}`}
                             onClick={() => openCrop(role)}
                           >
-                            <ArtworkImage src={image} alt={imageLabel(role)} className="h-auto w-auto max-h-full max-w-full object-contain" loading="lazy" />
+                            <ArtworkImage
+                              src={image}
+                              alt={imageLabel(role)}
+                              className="h-auto w-auto max-h-full max-w-full object-contain"
+                              loading="lazy"
+                            />
                           </Button>
                         ) : null;
                       })}
@@ -516,7 +654,10 @@ export function Work({
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
                         {state.elapsed !== undefined && (
                           <span className="tabular-nums">
-                            {state.status === "running" || state.status === "pending" ? "已用" : "用时"}{" "}
+                            {state.status === "running" ||
+                            state.status === "pending"
+                              ? "已用"
+                              : "用时"}{" "}
                             {state.elapsed.toFixed(1)} 秒
                           </span>
                         )}
@@ -528,27 +669,25 @@ export function Work({
                         {state.message}
                       </p>
                     )}
-                    <div className="flex justify-end">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        disabled={scrapeLocked}
-                        onClick={() => perform(() => scrape(id))}
-                      >
-                        {state.action}
-                      </Button>
-                    </div>
                   </div>
                 );
               })}
             </div>
-            <Diagnostics report={detail.process?.result} title="任务记录问题" active={processActive} taskRecord />
+            <Diagnostics
+              report={detail.process?.result}
+              title="任务记录问题"
+              active={processActive}
+              taskRecord
+            />
           </section>
         </div>
         <div className="h-8" aria-hidden="true" />
         <StickyActions>
-          {savedNotice && !changed && <span role="status" className="text-sm text-muted-foreground">已保存</span>}
+          {savedNotice && !changed && (
+            <span role="status" className="text-sm text-muted-foreground">
+              已保存
+            </span>
+          )}
           <Button type="submit" disabled={locked || !changed}>
             {pending === "save" ? "保存中" : "保存"}
           </Button>
@@ -559,8 +698,13 @@ export function Work({
           <CropEditor
             code={detail.code}
             input={cropImage.choice}
-            applyLabel={cropImage.role === "poster" || cropImage.role === "fanart" ? "应用裁剪" : "设为封面"}
+            applyLabel={
+              cropImage.role === "poster" || cropImage.role === "fanart"
+                ? "应用裁剪"
+                : "设为封面"
+            }
             image={cropImage.url}
+            originalImage={cropImage.originalUrl}
             coverPreview={cropImage.coverPreview}
             busy={locked}
             close={() => setCropImage(null)}

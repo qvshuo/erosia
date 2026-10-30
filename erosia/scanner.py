@@ -18,6 +18,7 @@ class Work(BaseModel):
     media_files: list[Path]
     title: str | None = None
     actors: list[str] = Field(default_factory=list)
+    poster: str | None = None
     status: str = "pending"
     category: Category = Category.UNKNOWN
     warnings: list[str] = Field(default_factory=list)

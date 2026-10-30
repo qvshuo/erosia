@@ -64,11 +64,19 @@ export function Settings({
   const changed =
     JSON.stringify(draft) !== JSON.stringify(settingsDraft(settings));
   useEffect(() => {
+    if (!testResult) return;
+    const timer = setTimeout(() => setTestResult(null), 6000);
+    return () => clearTimeout(timer);
+  }, [testResult]);
+  useEffect(() => {
     reportEdit({ dirty: changed, saving: pending });
     return () => reportEdit({ dirty: false, saving: false });
   }, [changed, pending, reportEdit]);
-  const translationConfigured = !!settings.translation.model.trim() && !!settings.translation.api_key.trim();
-  const translationChanged = JSON.stringify(draft.translation) !== JSON.stringify(settings.translation);
+  const translationConfigured =
+    !!settings.translation.model.trim() &&
+    !!settings.translation.api_key.trim();
+  const translationChanged =
+    JSON.stringify(draft.translation) !== JSON.stringify(settings.translation);
   function update<K extends keyof typeof draft>(
     key: K,
     value: (typeof draft)[K],
@@ -231,7 +239,19 @@ export function Settings({
                 {testing ? "测试中" : "测试服务"}
               </Button>
             </div>
-            {!testResult && <p role="status" className="text-sm text-muted-foreground">{translationChanged ? "翻译配置已修改，请重新测试" : !translationConfigured ? "未配置翻译服务" : settings.translation_status.valid === true ? "翻译服务已验证" : settings.translation_status.valid === false ? `翻译服务不可用：${errorText(settings.translation_status.message)}` : "翻译服务尚未验证"}</p>}
+            {!testResult && (
+              <p role="status" className="text-sm text-muted-foreground">
+                {translationChanged
+                  ? "翻译配置已修改，请重新测试"
+                  : !translationConfigured
+                    ? "未配置翻译服务"
+                    : settings.translation_status.valid === true
+                      ? "翻译服务已验证"
+                      : settings.translation_status.valid === false
+                        ? `翻译服务不可用：${errorText(settings.translation_status.message)}`
+                        : "翻译服务尚未验证"}
+              </p>
+            )}
             {testResult && (
               <div
                 role="status"
@@ -336,7 +356,7 @@ export function Settings({
                           }
                         />
                       </Field>
-                      <Field label="作品间隔">
+                      <Field label="请求间隔">
                         <Input
                           type="number"
                           min={0}
@@ -361,6 +381,7 @@ export function Settings({
                       {id === "javdb" && (
                         <Field label="Cookie">
                           <Secret
+                            placeholder="e.g. session=xxxx; cf_clearance=xxxx"
                             value={site.cookie ?? ""}
                             change={(cookie) =>
                               update("sites", {
@@ -446,9 +467,18 @@ export function Settings({
             </div>
           </section>
         </fieldset>
-        {settings.pending_settings && tasksActive && <div role="status" className="text-sm text-muted-foreground"><p>设置已保存，后续批次生效</p><p>目录将在队列空闲时切换</p></div>}
+        {settings.pending_settings && tasksActive && (
+          <div role="status" className="text-sm text-muted-foreground">
+            <p>设置已保存，后续批次生效</p>
+            <p>目录将在队列空闲时切换</p>
+          </div>
+        )}
         <StickyActions>
-          {savedNotice && !changed && <span role="status" className="text-sm text-muted-foreground">已保存</span>}
+          {savedNotice && !changed && (
+            <span role="status" className="text-sm text-muted-foreground">
+              已保存
+            </span>
+          )}
           <Button
             type="submit"
             disabled={pending || !changed || !draft.media_directories.length}
@@ -474,15 +504,18 @@ export function Settings({
   );
 }
 function Secret({
+  placeholder,
   value,
   change,
 }: {
+  placeholder?: string;
   value: string;
   change: (value: string) => void;
 }) {
   return (
     <Input
       type="password"
+      placeholder={placeholder}
       autoComplete="off"
       value={value}
       onFocus={(e) => {
