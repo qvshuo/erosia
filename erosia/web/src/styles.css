@@ -88,4 +88,6 @@
 
 html {
   scrollbar-gutter: stable;
+  /* Keep focused fields above the shared sticky save bar. */
+  scroll-padding-bottom: calc(5rem + env(safe-area-inset-bottom));
 }

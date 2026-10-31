@@ -147,7 +147,7 @@ class WebClient:
     def __init__(self, settings: Settings, *, runtime=None) -> None:
         self.settings = settings
         self.runtime = runtime
-        self.cooldowns = runtime.cooldowns() if runtime is not None else {}
+        self._cooldowns = {}
         self._stack = AsyncExitStack()
         self._sessions: dict[tuple[SourceId, str], Session] = {}
         self._session_lock = asyncio.Lock()
@@ -170,10 +170,16 @@ class WebClient:
             self._budgets[loop] = ({}, {}, {}, asyncio.Semaphore(8), asyncio.Semaphore(1))
         self._source_locks, self._host_locks, self._last_request, self._limit, self._solver_limit = self._budgets[loop]
 
+    @property
+    def cooldowns(self):
+        # Read shared state at request boundaries so manual resets reach active batches.
+        return self.runtime.cooldowns() if self.runtime is not None else self._cooldowns
+
     def _save_cooldown(self, source, row):
-        self.cooldowns[str(source)] = row
         if self.runtime is not None:
             self.runtime.save_cooldown(source, row)
+        else:
+            self._cooldowns[str(source)] = row
 
     def cooldown_key(self, source, url=None):
         if source != SourceId.DMM:

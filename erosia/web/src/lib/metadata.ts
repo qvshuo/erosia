@@ -9,6 +9,7 @@ export const fields = [
   ["actors", "演员", "list"],
   ["directors", "导演", "list"],
   ["studio", "制作商", "text"],
+  ["series", "系列", "text"],
   ["genres", "类型", "list"],
   ["tags", "标签", "list"],
 ] as const;

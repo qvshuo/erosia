@@ -168,6 +168,18 @@ def create_app(
     async def read_settings():
         return public_settings()
 
+    @app.get("/api/sources/cooldowns")
+    async def source_cooldowns():
+        if app.state.runner is None:
+            return {}
+        return {key: value for key, value in runner().runtime.cooldowns().items()
+                if value.get("cooldown_until", 0) > time.time()}
+
+    @app.delete("/api/sources/{source}/cooldown")
+    async def clear_source_cooldown(source: SourceId):
+        runner().runtime.clear_cooldown(source)
+        return await source_cooldowns()
+
     @app.post("/api/translation/test")
     async def test_translation(value: dict):
         options = {**current_settings().translation.model_dump(), **value}
@@ -388,7 +400,7 @@ def create_app(
             raise HTTPException(422, "invalid image selection")
         image_choices = {role: CropRequest.model_validate(choice).model_dump(exclude_none=True, exclude={"center"}) for role, choice in image_choices.items()}
         if set(value) != fields:
-            raise HTTPException(422, "完整填写可编辑字段，番号与系列不可编辑")
+            raise HTTPException(422, "完整填写可编辑字段，番号不可编辑")
         if service.work_running(key):
             raise ValueError("该作品正在刮削")
         async with service.task_lock, service.work_lock(key):
@@ -410,7 +422,7 @@ def create_app(
                     raise HTTPException(422, "剧照来源不可用")
                 image_choices = {role: choice for role, choice in image_choices.items() if not re.fullmatch(r"fanart[1-9][0-9]{0,2}", role)}
                 image_choices.update({f"fanart{i+1}": {"source": sample_source, "index": index} for i, index in enumerate(indexes)})
-            metadata = Metadata.model_validate({"code": key, "source_url": "", "series": previous.get("series"), **value})
+            metadata = Metadata.model_validate({"code": key, "source_url": "", **value})
             if not metadata.title.strip():
                 raise HTTPException(422, "title must not be empty")
             before = Metadata.model_validate(previous)
@@ -481,7 +493,7 @@ def create_app(
                         # A later repair must not overwrite groups explicitly selected in this save.
                         pending_images["protected_roles"] = sorted(set(pending_images.get("protected_roles", [])) | replaced)
                 report["translation_errors"] = list(errors.values())
-                report["stages"]["translation"] = "failed" if errors else "success"
+                report["stages"]["translation"] = "failed" if errors else "success" if translated else "skipped"
                 service.runtime.record_result(key, complete_report(report), selection=selection)
         service.refresh_work(key)
         return await work_details(str(work.path))

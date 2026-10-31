@@ -43,7 +43,6 @@ const errors: Record<string, string> = {
   "cannot update portraits while tasks are active": "任务结束后可更新头像。",
   "invalid gfriends file tree": "头像索引格式已变化。",
   "gfriends request failed": "头像来源请求失败。",
-  "seconds must be 1 or a multiple of 5 (0 disables an interval)": "秒数须为 1 或 5 的倍数，0 表示不设间隔。",
   "only JavDB supports a configured Cookie": "仅 JavDB 可配置 Cookie。",
   "paste only the single-line Cookie value: name=value; name2=value2": "请仅填写单行请求 Cookie。",
   "paste the request Cookie value, not Set-Cookie": "请填写请求 Cookie，不是 Set-Cookie。",

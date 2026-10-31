@@ -41,6 +41,38 @@ def actor_name_rules(names: ActorAliases):
     return pattern, digest
 
 
+def name_spans(value: str, names: re.Pattern | None) -> list[tuple[int, int]]:
+    spans = []
+    for match in names.finditer(value) if names else ():
+        start, end = match.span(1)
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(end, spans[-1][1]))
+        else:
+            spans.append((start, end))
+    return spans
+
+
+def without_names(value: str, spans: list[tuple[int, int]]) -> str:
+    parts, offset = [], 0
+    for start, end in spans:
+        parts.append(value[offset:start])
+        offset = end
+    parts.append(value[offset:])
+    return "".join(parts)
+
+
+def title_body(value: str, code: str, names: re.Pattern | None) -> str:
+    # Strip the catalog prefix before matching names that may also occur in codes.
+    value = re.sub(
+        r"^(?:[\[【(（]\s*)?" + re.escape(code)
+        + r"(?![A-Za-z0-9]|-(?=[A-Za-z0-9]))(?:\s*[\]】)）])?[\s:：_-]*",
+        "", value.strip(), flags=re.IGNORECASE,
+    )
+    body = without_names(value, name_spans(value, names))
+    body = re.sub(r"\[\s*\]|【\s*】|\(\s*\)|（\s*）", "", body)
+    return re.sub(r"\s+", " ", body).strip()
+
+
 class Translator:
     def __init__(self, settings: TranslationSettings, client: httpx.AsyncClient | None = None, *, actor_aliases_file: Path | None = None):
         self.settings = settings
@@ -82,12 +114,19 @@ class Translator:
         contract = {"enabled": settings.enabled, "endpoint": settings.endpoint.rstrip("/"),
                     "model": settings.model, "prompt": PROMPT, "roles": ["system", "user"],
                     "fields": ["title", "plot"], "actor_names": names_digest,
-                    "segmentation": "literal-overlap-v1"}
+                    "segmentation": "literal-overlap-v1", "title": "code-actors-stripped-title-v1"}
         return pattern, hashlib.sha256(json.dumps(contract, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     @property
     def fingerprint(self) -> str:
         return self._rules()[1]
+
+    def field_fingerprint(self, field: str, metadata: Metadata, fingerprint: str | None = None) -> str:
+        fingerprint = fingerprint or self.fingerprint
+        if field == "title":
+            return hashlib.sha256(json.dumps([fingerprint, metadata.code,
+                [actor.name for actor in metadata.actors]], ensure_ascii=False).encode()).hexdigest()
+        return fingerprint
 
     async def variant(self, variant: dict, *, fields=("title", "plot")) -> dict:
         names, fingerprint = self._rules()
@@ -97,7 +136,8 @@ class Translator:
         translated = set(variant.get("translated_fields", []))
         errors = {error["field"]: error for error in variant.get("translation_errors", [])}
         for field in fields:
-            if fingerprints.get(field) == fingerprint and field not in errors:
+            field_fingerprint = self.field_fingerprint(field, metadata, fingerprint)
+            if fingerprints.get(field) == field_fingerprint and field not in errors:
                 continue
             original = originals.get(field, getattr(metadata, field))
             if not original:
@@ -105,6 +145,8 @@ class Translator:
             # Each field owns its source text and attempt; one failure cannot
             # invalidate a successful translation of another field.
             originals[field] = original
+            if field == "title" and not metadata.original_title:
+                metadata.original_title = original
             setattr(metadata, field, original)
             report = await self.metadata(metadata, fields=(field,), names=names)
             fingerprints.pop(field, None)
@@ -112,8 +154,8 @@ class Translator:
             translated.update(report.translated_fields)
             errors.pop(field, None)
             errors.update({error["field"]: error for error in report.errors})
-            if self.enabled:
-                fingerprints[field] = fingerprint
+            if not report.errors:
+                fingerprints[field] = field_fingerprint
         return {**variant, "metadata": metadata.model_dump(mode="json"),
                 "translated_fields": sorted(translated), "original_fields": originals,
                 "translation_errors": list(errors.values()), "translation_fingerprints": fingerprints}
@@ -164,15 +206,7 @@ class Translator:
                     await asyncio.sleep(RETRY_DELAY_SECONDS)
             raise ValueError("translation failed after bounded retries")
 
-    async def _segmented_text(self, value: str, names: re.Pattern | None) -> str:
-        spans = []
-        for match in names.finditer(value) if names else ():
-            start, end = match.span(1)
-            if spans and start <= spans[-1][1]:
-                spans[-1] = (spans[-1][0], max(end, spans[-1][1]))
-            else:
-                spans.append((start, end))
-
+    async def _segmented_text(self, value: str, spans: list[tuple[int, int]]) -> str:
         async def fragment(text):
             core = text.strip()
             if not any(char.isalpha() for char in core):
@@ -190,20 +224,24 @@ class Translator:
 
     async def metadata(self, metadata: Metadata, *, fields=("title", "plot"), names: re.Pattern | None) -> TranslationReport:
         report = TranslationReport()
-        if not self.enabled:
-            if self.settings.enabled and self.available is False:
-                report.errors = [{"field": field, "error": self.validation_error or "翻译服务不可用"}
-                                 for field in fields if getattr(metadata, field)]
-            return report
         for field in fields:
             value = getattr(metadata, field)
             if value:
                 try:
-                    translated = await self._segmented_text(value, names)
-                    setattr(metadata, field, translated)
-                    if translated != value:
+                    body = title_body(value, metadata.code, names) if field == "title" else value
+                    spans = name_spans(body, names) if self.settings.enabled and field == "plot" else []
+                    text = without_names(body, spans) if field == "plot" else body
+                    needs_translation = self.settings.enabled and any(char.isalpha() for char in text)
+                    if needs_translation and self.available is False:
+                        raise ValueError(self.validation_error or "翻译服务不可用")
+                    if needs_translation:
+                        body = await self.text(body) if field == "title" else await self._segmented_text(body, spans)
                         report.translated_fields.append(field)
                         report.original_fields[field] = value
+                    if field == "title":
+                        body = " ".join(part for part in
+                            [metadata.code, *[actor.name for actor in metadata.actors], body] if part)
+                    setattr(metadata, field, body)
                 except (ValueError, httpx.HTTPError) as exc:
                     report.errors.append({"field": field, "error": str(exc)})
         return report

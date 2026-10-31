@@ -23,17 +23,11 @@ SOURCE_INTERVALS = {
 }
 
 
-def seconds(value: float) -> float:
-    if value < 0 or (value != 1 and value % 5 != 0):
-        raise ValueError("seconds must be 1 or a multiple of 5 (0 disables an interval)")
-    return value
-
-
 class SiteSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_url: str | None = None
     cookie: str = Field(default="", repr=False)
-    interval_seconds: float | None = Field(default=None, ge=0)
+    interval_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     @field_validator("base_url")
     @classmethod
@@ -52,11 +46,6 @@ class SiteSettings(BaseModel):
         ):
             raise ValueError("source address requires an HTTPS URL without credentials or query")
         return value.rstrip("/")
-
-    @field_validator("interval_seconds")
-    @classmethod
-    def interval(cls, value: float | None) -> float | None:
-        return seconds(value) if value is not None else None
 
     @field_validator("cookie")
     @classmethod
@@ -109,9 +98,8 @@ class TranslationSettings(BaseModel):
     endpoint: str = "https://api.openai.com/v1"
     model: str = ""
     api_key: str = Field(default="", repr=False)
-    timeout_seconds: float = Field(default=30, gt=0)
-    interval_seconds: float = Field(default=1, ge=0)
-    _seconds = field_validator("timeout_seconds", "interval_seconds")(seconds)
+    timeout_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
+    interval_seconds: float = Field(default=1, ge=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def configured(self) -> TranslationSettings:
@@ -135,8 +123,8 @@ class TranslationSettings(BaseModel):
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     flaresolverr_url: str | None = "http://flaresolverr:8191/v1"
-    timeout_seconds: float = Field(default=25, gt=0)
-    source_timeout_seconds: float = Field(default=180, ge=5)
+    timeout_seconds: float = Field(default=25, gt=0, allow_inf_nan=False)
+    source_timeout_seconds: float = Field(default=180, ge=5, allow_inf_nan=False)
     retry_delay_seconds: int = Field(default=5, ge=1)
     retries: int = Field(default=1, ge=0, le=3)
     sites: dict[SourceId, SiteSettings] = Field(default_factory=dict)
@@ -173,10 +161,6 @@ class Settings(BaseModel):
             ],
         }
     )
-    _seconds = field_validator("timeout_seconds", "source_timeout_seconds", "retry_delay_seconds")(
-        seconds
-    )
-
     @field_validator("flaresolverr_url")
     @classmethod
     def solver_address(cls, value: str | None) -> str | None:

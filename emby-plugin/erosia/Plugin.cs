@@ -33,7 +33,7 @@ public sealed class Plugin : BasePluginSimpleUI<PluginOptions>, IHasThumbImage
     public static Plugin? Instance { get; private set; }
     public Plugin(IApplicationHost applicationHost) : base(applicationHost) => Instance = this;
     public override string Name => "erosia";
-    public override string Description => "读取 erosia 的作品元数据和图片。";
+    public override string Description => "读取本地元数据和图片，文件变更后自动刷新。";
     public override Guid Id => new Guid("d6a2ef14-910b-4aa3-b2a8-ded970e55dc1");
     public PluginOptions Options => GetOptions();
     public Stream GetThumbImage() => GetType().Assembly.GetManifestResourceStream("erosia.icon.png")!;

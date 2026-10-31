@@ -338,9 +338,8 @@ class TaskQueue:
             names = ActorAliases.load(self.settings.actor_aliases_file)
             self.runtime.save_issues(names.pending(self.runtime.issues))
             async with self.scraper_factory(self.settings) as scraper, Gfriends(self.settings, names, self.output) as portraits:
-                if hasattr(scraper.client, "cooldowns"):
+                if isinstance(scraper.client, WebClient):
                     scraper.client.runtime = self.runtime
-                    scraper.client.cooldowns = self.runtime.cooldowns()
                 async def process_item(item):
                     async with self.work_lock(item["code"]):
                         self._running_codes.add(item["code"])
@@ -378,8 +377,6 @@ class TaskQueue:
                         report = {"code": item["code"], "status": "error", "error": str(exc)}
                     finally:
                         progress.reset(token)
-                    if request.type != "update_portraits" and self.settings.translation.enabled and not self.translator.available:
-                        report["warnings"] = [*report.get("warnings", []), "翻译服务不可用：" + self.translator.validation_error]
                     task_report = retry_task_report(report, repair_stages) if repairing else report
                     outcome = "partial" if task_report.get("partial") else "success" if task_report["status"] in ("found", "unchanged") else "failed"
                     item.update(status=outcome, result=task_report)

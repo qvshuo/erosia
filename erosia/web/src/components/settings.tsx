@@ -3,7 +3,7 @@ import { FolderOpen, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { errorText } from "@/lib/messages";
-import { api, categories, sources } from "@/lib/api";
+import { api, categories, sources, statuses } from "@/lib/api";
 import type { Settings as Preferences } from "@/lib/types";
 import {
   Empty,
@@ -14,6 +14,7 @@ import {
 } from "./shared";
 
 const DirectoryBrowser = lazy(() => import("./directory-browser"));
+type Cooldowns = Record<string, { cooldown_until: number; cooldown_reason: string }>;
 function settingsDraft({
   configured: _configured,
   translation_status: _translationStatus,
@@ -303,7 +304,8 @@ export function Settings({
               <Field label="翻译超时">
                 <Input
                   type="number"
-                  min={1}
+                  min={0}
+                  step="any"
                   value={draft.translation.timeout_seconds}
                   onChange={(e) =>
                     update("translation", {
@@ -317,6 +319,7 @@ export function Settings({
                 <Input
                   type="number"
                   min={0}
+                  step="any"
                   value={draft.translation.interval_seconds}
                   onChange={(e) =>
                     update("translation", {
@@ -331,71 +334,13 @@ export function Settings({
           <section className="rounded-lg border p-4">
             <h3 className="text-lg font-semibold">来源设置</h3>
             <div className="mt-4 space-y-4">
-              {Object.entries(sources).map(([id, name]) => {
-                const site = draft.sites[id] ?? {
-                  base_url: null,
-                  interval_seconds: null,
-                };
-                return (
-                  <section key={id} className="border-b pb-3 last:border-0">
-                    <h4 className="text-base font-medium">{name}</h4>
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                      <Field label="站点地址">
-                        <Input
-                          type="url"
-                          value={site.base_url ?? ""}
-                          placeholder={settings.source_defaults[id]}
-                          onChange={(e) =>
-                            update("sites", {
-                              ...draft.sites,
-                              [id]: {
-                                ...site,
-                                base_url: e.target.value || null,
-                              },
-                            })
-                          }
-                        />
-                      </Field>
-                      <Field label="请求间隔">
-                        <Input
-                          type="number"
-                          min={0}
-                          step={5}
-                          value={site.interval_seconds ?? ""}
-                          placeholder={String(
-                            settings.source_intervals[id] ?? "",
-                          )}
-                          onChange={(e) =>
-                            update("sites", {
-                              ...draft.sites,
-                              [id]: {
-                                ...site,
-                                interval_seconds: e.target.value
-                                  ? e.target.valueAsNumber
-                                  : null,
-                              },
-                            })
-                          }
-                        />
-                      </Field>
-                      {id === "javdb" && (
-                        <Field label="Cookie">
-                          <Secret
-                            placeholder="e.g. session=xxxx; cf_clearance=xxxx"
-                            value={site.cookie ?? ""}
-                            change={(cookie) =>
-                              update("sites", {
-                                ...draft.sites,
-                                [id]: { ...site, cookie },
-                              })
-                            }
-                          />
-                        </Field>
-                      )}
-                    </div>
-                  </section>
-                );
-              })}
+              <Sites
+                settings={settings}
+                value={draft.sites}
+                change={(sites) => update("sites", sites)}
+                run={run}
+                saving={pending}
+              />
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-base font-medium">来源排序</h3>
                 <Button
@@ -500,6 +445,163 @@ export function Settings({
           />
         </Suspense>
       )}
+    </div>
+  );
+}
+function Sites({
+  settings,
+  value,
+  change,
+  run,
+  saving,
+}: {
+  settings: Preferences;
+  value: Preferences["sites"];
+  change: (value: Preferences["sites"]) => void;
+  run: (fn: () => Promise<void>) => void;
+  saving: boolean;
+}) {
+  const [cooldowns, setCooldowns] = useState<Cooldowns>({});
+  const [clock, setClock] = useState(() => Date.now() / 1000);
+  const [resetting, setResetting] = useState<string | null>(null);
+  useEffect(() => {
+    if (resetting !== null || saving) return;
+    const controller = new AbortController();
+    let loading = false;
+    async function refresh() {
+      if (loading || document.hidden) return;
+      loading = true;
+      try {
+        const value = await api<Cooldowns>(
+          "sources/cooldowns", "GET", undefined, controller.signal,
+        );
+        if (!controller.signal.aborted) {
+          setCooldowns(value);
+          setClock(Date.now() / 1000);
+        }
+      } finally {
+        loading = false;
+      }
+    }
+    const refreshVisible = () => run(refresh);
+    refreshVisible();
+    const timer = setInterval(refreshVisible, 3000);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
+  }, [run, resetting, saving]);
+  const cooling = Object.values(cooldowns).some((row) => row.cooldown_until > clock);
+  useEffect(() => {
+    if (!cooling) return;
+    const timer = setInterval(() => setClock(Date.now() / 1000), 1000);
+    return () => clearInterval(timer);
+  }, [cooling]);
+  return (
+    <div className="space-y-4">
+      {Object.entries(sources).map(([id, name]) => {
+        const site = value[id] ?? {
+          base_url: null,
+          interval_seconds: null,
+        };
+        const rows = Object.entries(cooldowns).filter(
+          ([key, row]) => (key === id || key.startsWith(`${id}:`)) && row.cooldown_until > clock,
+        );
+        return (
+          <section key={id} className="border-b pb-3 last:border-0">
+            <h4 className="text-base font-medium">{name}</h4>
+            {rows.length > 0 && (
+              <div className="mt-2 grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 sm:w-fit sm:max-w-full sm:min-w-[calc((100%_-_0.75rem)/2)]">
+                <div className="min-w-0 text-sm text-amber-700 tabular-nums dark:text-amber-400">
+                  {rows.map(([key, row]) => (
+                    <p key={key} className="break-words">
+                      {key.includes(":") ? `${key.slice(key.indexOf(":") + 1)}：` : ""}
+                      {statuses[row.cooldown_reason] ?? "来源冷却"}，剩余 {Math.ceil(row.cooldown_until - clock)} 秒
+                    </p>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={resetting !== null}
+                  onClick={() =>
+                    run(async () => {
+                      setResetting(id);
+                      try {
+                        setCooldowns(await api<Cooldowns>(`sources/${id}/cooldown`, "DELETE"));
+                        setClock(Date.now() / 1000);
+                      } finally {
+                        setResetting(null);
+                      }
+                    })
+                  }
+                >
+                  解除冷却
+                </Button>
+              </div>
+            )}
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Field label="站点地址">
+                <Input
+                  type="url"
+                  value={site.base_url ?? ""}
+                  placeholder={settings.source_defaults[id]}
+                  onChange={(e) =>
+                    change({
+                      ...value,
+                      [id]: {
+                        ...site,
+                        base_url: e.target.value || null,
+                      },
+                    })
+                  }
+                />
+              </Field>
+              <Field label="请求间隔">
+                <Input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={site.interval_seconds ?? ""}
+                  placeholder={String(
+                    settings.source_intervals[id] ?? "",
+                  )}
+                  onChange={(e) =>
+                    change({
+                      ...value,
+                      [id]: {
+                        ...site,
+                        interval_seconds: e.target.value
+                          ? e.target.valueAsNumber
+                          : null,
+                      },
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  秒；留空默认，0 无间隔，支持小数
+                </p>
+              </Field>
+              {id === "javdb" && (
+                <Field label="Cookie">
+                  <Secret
+                    placeholder="e.g. session=xxxx; cf_clearance=xxxx"
+                    value={site.cookie ?? ""}
+                    change={(cookie) =>
+                      change({
+                        ...value,
+                        [id]: { ...site, cookie },
+                      })
+                    }
+                  />
+                </Field>
+              )}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

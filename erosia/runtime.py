@@ -245,3 +245,9 @@ class RuntimeStore:
     def save_cooldown(self, source, value):
         with self.connection:
             self._write("cooldown", str(source), value)
+
+    def clear_cooldown(self, source):
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM records WHERE kind='cooldown' AND (id=? OR id LIKE ?)",
+                (str(source), str(source) + ":%"))

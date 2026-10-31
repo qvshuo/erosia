@@ -129,8 +129,6 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
     selected = await translator.variant(selected, fields=fields)
     runtime.save_variant(work.code, selected)
     metadata = Metadata.model_validate(selected["metadata"])
-    if missing_only and previous and previous.series:
-        metadata.series = previous.series
     for field in protected:
         setattr(metadata, field, getattr(previous, field))
     previous_report = runtime.results.get(work.code, {})
@@ -140,7 +138,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
     if previous:
         for error in report["translation_errors"]:
             field = error["field"]
-            if getattr(previous, field):
+            if getattr(previous, field) or selection.get("field_sources", {}).get(field) == "custom":
                 setattr(metadata, field, getattr(previous, field))
     field_sources = {field: selection.get("field_sources", {}).get(field, "unknown")
                      if field in protected else result.selected_source for field in EDITABLE_FIELDS}
@@ -165,7 +163,8 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
         selection["pending_images"] = request
     else:
         report["warnings"].append("所选来源无图片" + ("，已保留旧图" if image_manifest(target_folder(output, work.code), work) else ""))
-    report["stages"] = {"metadata": "success", "translation": "failed" if report["translation_errors"] else "success",
+    report["stages"] = {"metadata": "success", "translation": "failed" if report["translation_errors"] else
+        "success" if any(field in selected["translated_fields"] for field in fields) else "skipped",
         "images": "pending" if request else "skipped", "portraits": "pending" if portraits else "skipped"}
     report_progress("metadata")
     with file_transaction(target_folder(output, work.code)):
@@ -192,8 +191,8 @@ async def retry_work(scraper, work, output, translator, runtime, portraits, stag
         originals = selection.get("original_fields", {})
         fields = tuple(field for field in ("title", "plot")
                        if selection.get("field_sources", {}).get(field) != "custom" and originals.get(field)
-                       and (field in failed or selection.get("translation_fingerprints", {}).get(field) != translator.fingerprint))
-        if fields and not translator.enabled:
+                       and (field in failed or selection.get("translation_fingerprints", {}).get(field) != translator.field_fingerprint(field, metadata)))
+        if fields and not translator.settings.enabled:
             raise ValueError("请先配置并验证翻译服务")
         variant = await translator.variant({"metadata": metadata.model_dump(mode="json"),
             "original_fields": originals, "translated_fields": selection.get("translated_fields", []),
@@ -202,11 +201,10 @@ async def retry_work(scraper, work, output, translator, runtime, portraits, stag
         updated = Metadata.model_validate(variant["metadata"])
         for error in variant["translation_errors"]:
             field = error["field"]
-            if getattr(metadata, field):
-                setattr(updated, field, getattr(metadata, field))
+            setattr(updated, field, getattr(metadata, field))
         metadata = updated
         report["translation_errors"] = variant["translation_errors"]
-        report["stages"]["translation"] = "failed" if variant["translation_errors"] else "success"
+        report["stages"]["translation"] = "failed" if variant["translation_errors"] else "success" if variant["translated_fields"] else "skipped"
         selection.update(translated_fields=variant["translated_fields"], original_fields=variant["original_fields"],
                          translation_fingerprints=variant["translation_fingerprints"])
         with file_transaction(target_folder(output, work.code)):
