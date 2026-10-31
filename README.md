@@ -6,7 +6,7 @@
 
 刮削 JAV 视频元数据。
 
-- 多源刮削：支持 DMM、JavDB、JavBus、FC2、AVSOX、AirAV、1Pondo、Caribbeancom、HEYZO、AVbase；
+- 多源刮削：支持 DMM、JavDB、JavBus 等来源；
 - 配套插件：Emby 插件直接读取本地 NFO、封面、剧照和演员头像；
 - 演员头像：从 gfriends 获取头像，支持日文主名、中文名和别名匹配；
 - 封面裁剪：支持人脸检测、居中和手动调整，生成 2:3 封面；
@@ -17,10 +17,10 @@
 
 ```sh
 git clone --depth=1 https://github.com/qvshuo/erosia.git erosia && cd erosia
-mkdir -p data
+mkdir -p /path/to/data # 替换为实际的数据目录
 cp docker-compose.example.yml docker-compose.yml
 
-# 修改 docker-compose.yml 中的作品目录和项目路径后启动
+# 修改 docker-compose.yml 中的作品目录和数据目录后启动
 docker compose up -d --build
 ```
 
