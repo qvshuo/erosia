@@ -7,7 +7,7 @@ services:
       - "0.0.0.0:9307:9307"
     volumes:
       - /path/to/library:/media:ro # 改为视频、STRM 所在的实际目录
-      - ./data:/data
+      - /path/to/erosia/data:/data # 改为项目的实际路径，元数据默认保存在 data/metadata
     environment:
       TZ: Asia/Shanghai
     depends_on:
@@ -19,7 +19,7 @@ services:
     environment:
       TZ: Asia/Shanghai
     volumes:
-      - ./data/flaresolverr:/config
+      - /path/to/erosia/data/flaresolverr:/config
     healthcheck:
       test:
         - CMD
