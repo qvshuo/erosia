@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .actors import ActorAliases, library_actors
+from .actors import ActorAliases, actor_type, library_actors
 from .catalog import CatalogRules
 from .engine import Scraper
 from .images import Gfriends
@@ -121,6 +121,8 @@ class TaskQueue:
         return [t for t in self.runtime.tasks() if t["status"] in ("pending", "running")]
 
     def _apply_result(self, work, result):
+        if result.get("category"):
+            work.category = Category(result["category"])
         work.title, work.actors = None, []
         work.poster = None
         work.warnings = [warning for warning in work.warnings if warning != "NFO 无效，等待补抓"]
@@ -417,7 +419,7 @@ class TaskQueue:
             actors = dict.fromkeys(actor.name for path in nfo_paths(self.output, work)
                                    for actor in read_nfo(path, work.code).actors
                                    if actor.name in request.actor_names)
-            records = await portraits.save([Actor(name=name) for name in actors], replace=True)
+            records = await portraits.save([Actor(name=name) for name in actors], replace=True, kind=actor_type(work.category))
             failed = any(record["status"] == "error" for record in records)
             report = complete_report({"code": work.code, "status": "error" if failed else "found", "portraits": records,
                                       "stages": {"portraits": "failed" if failed else "success"}})

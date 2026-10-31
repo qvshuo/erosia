@@ -418,8 +418,8 @@ function ActorDetail({
       ) : (
         <>
           <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold">{actor.name}</h2>
+            <div className="min-w-0 flex-1">
+              <h2 className="break-words text-xl font-semibold">{actor.name}</h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 {actor.count} 部作品
               </p>
@@ -473,11 +473,6 @@ function ActorDetail({
                 {actor.actors.some((value) => value !== actor.name) && (
                   <p className="mt-3 break-words text-sm text-muted-foreground">
                     作品署名：{actor.actors.join("、")}
-                  </p>
-                )}
-                {actor.status === "ambiguous" && (
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    别名有歧义
                   </p>
                 )}
               </CardContent>

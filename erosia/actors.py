@@ -1,4 +1,4 @@
-"""Japanese primary names with conservative alias lookup; no online actor scraping."""
+"""Typed Japanese actor names with conservative alias lookup."""
 
 from __future__ import annotations
 
@@ -8,42 +8,55 @@ import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
+from .models import Category
+
 
 def comparison_name(name: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", name).strip()).casefold()
+
+
+def actor_type(category: Category | str | None, fallback: Category | str | None = None) -> int | None:
+    kinds = {Category.CENSORED: 0, Category.UNCENSORED: 1}
+    return kinds.get(category, kinds.get(fallback))
 
 
 class ActorAliases:
     def __init__(self, actors: dict[str, dict]):
         if not isinstance(actors, dict):
             raise ValueError("actor mapping must contain an actors object")
-        for name, record in actors.items():
-            if (
-                not isinstance(name, str)
-                or not name.strip()
-                or not isinstance(record, dict)
-                or any(
-                    not isinstance(record.get(field), list)
-                    or any(not isinstance(v, str) for v in record[field])
-                    for field in ("aliases", "homepages")
-                )
-            ):
-                raise ValueError(
-                    "actor mapping requires primary names, aliases and homepages string lists"
-                )
         self.actors = actors
-        owners: dict[str, set[str]] = {}
-        primary_owners: dict[str, set[str]] = {}
-        for name, record in actors.items():
-            primary_owners.setdefault(comparison_name(name), set()).add(name)
-            for alias in [name, *record["aliases"]]:
-                owners.setdefault(comparison_name(alias), set()).add(name)
-        # A primary name is authoritative even when another record lists it as an alias.
-        owners.update(primary_owners)
-        self.aliases = {
-            alias: next(iter(names)) for alias, names in owners.items() if len(names) == 1
-        }
-        self.ambiguous = {alias: sorted(names) for alias, names in owners.items() if len(names) > 1}
+        self._owners = {None: {}, 0: {}, 1: {}}
+        self._records = {}
+        self.all_names = set()
+        for ident, record in actors.items():
+            if (
+                not isinstance(ident, str)
+                or not ident.strip()
+                or not isinstance(record, dict)
+                or set(record) - {"type", "name", "name_zht", "other_name"}
+                or type(record.get("type")) is not int
+                or record["type"] not in (0, 1)
+                or not isinstance(record.get("name"), str)
+                or not record["name"].strip()
+                or ("name_zht" in record and (
+                    not isinstance(record["name_zht"], str) or not record["name_zht"].strip()
+                ))
+                or ("other_name" in record and (
+                    not isinstance(record["other_name"], list) or not record["other_name"]
+                    or any(not isinstance(name, str) or not name.strip() for name in record["other_name"])
+                ))
+            ):
+                raise ValueError("actor mapping requires ID keys and type/name records with optional name_zht/other_name")
+            primary = record["name"]
+            self._records.setdefault(primary, []).append(record)
+            for name in self.record_names(record):
+                self.all_names.add(name)
+                for kind in (None, record["type"]):
+                    self._owners[kind].setdefault(comparison_name(name), set()).add(primary)
+
+    @staticmethod
+    def record_names(record):
+        return [name for name in [record["name"], record.get("name_zht"), *record.get("other_name", [])] if name]
 
     @classmethod
     def load(cls, path: Path | None = None) -> ActorAliases:
@@ -54,38 +67,42 @@ class ActorAliases:
     @classmethod
     @lru_cache(maxsize=4)
     def _load(cls, path, stamp):
-        value = path.read_text(encoding="utf-8")
-        document = json.loads(value)
-        if (
-            not isinstance(document, dict)
-            or document.get("version") != 1
-            or "actors" not in document
-        ):
-            raise ValueError("unsupported actor mapping schema")
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or set(document) != {"actors"}:
+            raise ValueError("actor mapping requires only an actors object")
         return cls(document["actors"])
 
-    def resolve(self, name: str) -> str | None:
-        """Return a Japanese primary name only when identity is unambiguous."""
+    def candidates(self, name: str, kind: int | None = None) -> list[str]:
         key = comparison_name(name)
-        if key in self.ambiguous:
-            return None
-        if key in self.aliases:
-            return self.aliases[key]
-        if match := re.fullmatch(r"(.+?)\(([^()]+)\)", key):
-            parts = [comparison_name(part) for part in match.groups()]
-            if all(part in self.aliases for part in parts):
-                candidates = {self.aliases[part] for part in parts}
-                if len(candidates) == 1:
-                    return next(iter(candidates))
-                self.ambiguous[key] = sorted(candidates)
-        return None
+        matches = self._owners[kind].get(key) if kind in (0, 1) else None
+        # A typed ambiguity stays ambiguous; only a missing typed match falls back globally.
+        if not matches:
+            matches = self._owners[None].get(key, set())
+        if not matches and (match := re.fullmatch(r"(.+?)\(([^()]+)\)", key)):
+            parts = [self.candidates(part, kind) for part in match.groups()]
+            if all(parts):
+                matches = set().union(*parts)
+        return sorted(matches or [])
+
+    def resolve(self, name: str, kind: int | None = None) -> str | None:
+        matches = self.candidates(name, kind)
+        return matches[0] if len(matches) == 1 else None
+
+    def aliases_for(self, name: str, kind: int | None = None) -> list[str]:
+        primary = self.resolve(name, kind)
+        if primary is None:
+            return []
+        records = self._records[primary]
+        scoped = [record for record in records if record["type"] == kind]
+        return list(dict.fromkeys(alias for record in (scoped or records)
+                                  for alias in self.record_names(record)
+                                  if self.resolve(alias, kind) == primary))
 
     def pending(self, issues: dict[str, dict]) -> dict[str, dict]:
         pending = {}
         for name, issue in issues.items():
-            if self.resolve(name) is None and (
-                candidates := self.ambiguous.get(comparison_name(name), [])
-            ):
+            candidates = self.candidates(name, issue.get("type"))
+            if len(candidates) > 1:
                 pending[name] = {**issue, "status": "ambiguous", "candidates": candidates}
         return pending
 
@@ -120,28 +137,36 @@ def library_actors(works, output: Path, names: ActorAliases, query: str = "") ->
             continue
         for actor in metadata.actors:
             row = rows.setdefault(
-                actor.name, {"actors": [actor.name], "codes": set(), "eligible": True}
+                actor.name, {"codes": set(), "types": set()}
             )
             row["codes"].add(work.code)
+            row["types"].add(actor_type(work.category))
 
     needle = comparison_name(query)
     matched = {}
     if needle:
-        for primary, record in names.actors.items():
-            if any(needle in comparison_name(value) for value in [primary, *record["aliases"]]):
-                matched[primary] = {"actors": [], "codes": set(), "eligible": True}
+        for record in names.actors.values():
+            if any(needle in comparison_name(value) for value in names.record_names(record)):
+                matched[record["name"]] = {"actors": [], "codes": set(), "types": set()}
+    represented = set()
     for name, row in rows.items():
-        primary = (names.resolve(name) or name) if needle and row["eligible"] else name
-        if needle and primary not in matched and needle not in comparison_name(name):
+        candidates = set().union(*(names.candidates(name, kind) for kind in row["types"]))
+        if needle and not candidates.intersection(matched) and needle not in comparison_name(name):
             continue
-        target = matched.setdefault(primary, {"actors": [], "codes": set(), "eligible": True})
+        # Existing NFO names remain the library identity, including when aliases match a search.
+        target = matched.setdefault(name, {"actors": [], "codes": set(), "types": set()})
         target["actors"].append(name)
         target["codes"].update(row["codes"])
+        target["types"].update(row["types"])
+        represented.update(candidates)
 
     result = []
     for name, row in matched.items():
-        resolved = names.resolve(name) if row["eligible"] else None
-        candidates = names.ambiguous.get(comparison_name(name), []) if row["eligible"] else []
+        if not row["actors"] and name in represented:
+            continue
+        candidates = sorted(set().union(*(names.candidates(name, kind) for kind in (row["types"] or {None}))))
+        resolved = candidates[0] if len(candidates) == 1 else None
+        candidates = candidates if len(candidates) > 1 else []
         portrait_name = next((actual for actual in row["actors"] if portrait(actual)), None)
         if not row["actors"] and portrait(name):
             portrait_name = name
@@ -160,8 +185,7 @@ def library_actors(works, output: Path, names: ActorAliases, query: str = "") ->
                 "portrait": version is not None,
                 "portrait_status": "ready" if version else "missing",
                 "portrait_version": f"{version.st_mtime_ns}-{version.st_size}" if version else None,
-                "portrait_eligible": row["eligible"]
-                and not candidates
+                "portrait_eligible": not candidates
                 and not invalid_names.intersection(row["actors"] or [name]),
                 "status": "ambiguous" if candidates else "known" if resolved else "original",
                 "candidates": candidates,

@@ -359,18 +359,11 @@ class Gfriends:
                 await asyncio.sleep(self.settings.retry_delay_seconds)
         raise ValueError("gfriends request failed")
 
-    def select(self, name: str) -> str | None:
-        if comparison_name(name) in self.names.ambiguous:
+    def select(self, name: str, kind: int | None = None) -> str | None:
+        if len(self.names.candidates(name, kind)) > 1:
             raise ValueError("演员别名对应多人")
-        primary = self.names.resolve(name) or name
-        candidates = [
-            primary,
-            *[
-                alias
-                for alias in self.names.actors.get(primary, {}).get("aliases", [])
-                if self.names.resolve(alias) == primary
-            ],
-        ]
+        primary = self.names.resolve(name, kind) or name
+        candidates = [primary, *self.names.aliases_for(name, kind)]
         for candidate in dict.fromkeys(candidates):
             # Content is ordered low-to-high quality; the last bank wins.
             for bank, files in reversed(list(self.index.items())):
@@ -392,7 +385,7 @@ class Gfriends:
                 canonical = re.sub(r"-\d+$", "", canonical)
                 if (
                     comparison_name(canonical) != comparison_name(primary)
-                    and self.names.resolve(canonical) != primary
+                    and self.names.resolve(canonical, kind) != primary
                 ):
                     continue
                 return (
@@ -405,24 +398,24 @@ class Gfriends:
                 )
         return None
 
-    async def save(self, actors, replace: bool = False) -> list[dict]:
+    async def save(self, actors, replace: bool = False, *, kind: int | None = None) -> list[dict]:
         async with self.save_lock:
-            return await self._save(actors, replace)
+            return await self._save(actors, replace, kind)
 
-    async def _save(self, actors, replace: bool = False) -> list[dict]:
+    async def _save(self, actors, replace: bool, kind: int | None) -> list[dict]:
         records = []
         for actor in actors:
             name = actor.name
-            if (name, replace) in self.completed:
-                records.append(self.completed[(name, replace)])
+            if (name, replace, kind) in self.completed:
+                records.append(self.completed[(name, replace, kind)])
                 continue
             try:
                 existing = actor_image(self.output, name)
                 if existing and not replace:
                     records.append({"name": name, "status": "existing"})
-                    self.completed[(name, replace)] = records[-1]
+                    self.completed[(name, replace, kind)] = records[-1]
                     continue
-                if comparison_name(name) in self.names.ambiguous:
+                if len(self.names.candidates(name, kind)) > 1:
                     raise ValueError("演员别名对应多人")
                 report_progress("portraits", source="gfriends")
                 if self.index is None and self.index_error is None:
@@ -437,10 +430,10 @@ class Gfriends:
                         self.index_error = str(exc)
                 if self.index_error:
                     raise ValueError(self.index_error)
-                url = self.select(name)
+                url = self.select(name, kind)
                 if not url:
                     records.append({"name": name, "status": "not_found"})
-                    self.completed[(name, replace)] = records[-1]
+                    self.completed[(name, replace, kind)] = records[-1]
                     report_progress("portraits", "not_found", source="gfriends", message=name)
                     continue
                 image = await asyncio.to_thread(validate_image, await self.document(url, 32 * 1024 * 1024))
@@ -452,7 +445,7 @@ class Gfriends:
                 records.append({"name": name, "status": "saved"})
             except (ValueError, OSError) as exc:
                 records.append({"name": name, "status": "error", "error": str(exc)})
-            self.completed[(name, replace)] = records[-1]
+            self.completed[(name, replace, kind)] = records[-1]
             report_progress("portraits", records[-1]["status"], source="gfriends", message=name)
         return records
 

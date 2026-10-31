@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from .actors import ActorAliases, comparison_name
+from .actors import ActorAliases, actor_type
 from .contract import EDITABLE_FIELDS
 from .engine import Scraper
 from .images import save_images
@@ -15,16 +15,17 @@ from .translation import Translator
 logger = logging.getLogger(__name__)
 
 
-def resolve_actor_names(metadata: Metadata, names: ActorAliases) -> list[dict]:
+def resolve_actor_names(metadata: Metadata, names: ActorAliases, category=None) -> list[dict]:
     actors, issues, seen = [], [], set()
+    kind = actor_type(metadata.classification.category, category)
     for actor in metadata.actors:
-        primary = names.resolve(actor.name)
+        primary = names.resolve(actor.name, kind)
         if primary:
             actor = actor.model_copy(update={"name": primary})
         else:
-            candidates = names.ambiguous.get(comparison_name(actor.name), [])
-            if candidates:
-                issues.append({"name": actor.name, "status": "ambiguous", "candidates": candidates})
+            candidates = names.candidates(actor.name, kind)
+            if len(candidates) > 1:
+                issues.append({"name": actor.name, "type": kind, "status": "ambiguous", "candidates": candidates})
                 logger.warning("演员名称存在歧义，保留来源名字：%s", actor.name)
         if actor.name not in seen:
             actors.append(actor)
@@ -121,7 +122,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
     protected = {field for field in EDITABLE_FIELDS
                  if missing_only and previous
                  and (field in customized or getattr(previous, field) not in (None, "", []))}
-    report["actor_issues"] = resolve_actor_names(candidate, names) if "actors" not in protected else []
+    report["actor_issues"] = resolve_actor_names(candidate, names, work.category) if "actors" not in protected else []
     selected["metadata"] = candidate.model_dump(mode="json")
     fields = tuple(field for field in ("title", "plot") if field not in protected)
     report_progress("translation" if translator.enabled and fields else "metadata")
@@ -175,7 +176,7 @@ async def process_work(scraper: Scraper, work: Work, output: Path, names: ActorA
         report["images"] = await write_artwork(scraper.client, work, output, request, selection)
         report["stages"]["images"] = "failed" if any(r["status"] == "error" for r in report["images"]) else "success"
         runtime.record_result(work.code, complete_report({**report, "actor_issues": []}), selection=selection)
-    report["portraits"] = await portraits.save(metadata.actors) if portraits else []
+    report["portraits"] = await portraits.save(metadata.actors, kind=actor_type(metadata.classification.category, work.category)) if portraits else []
     report["stages"]["portraits"] = "failed" if any(r["status"] == "error" for r in report["portraits"]) else "success" if portraits else "skipped"
     return complete_report(report)
 
@@ -219,7 +220,7 @@ async def retry_work(scraper, work, output, translator, runtime, portraits, stag
         report["stages"]["images"] = "failed" if any(r["status"] == "error" for r in report["images"]) else "success"
         runtime.record_result(work.code, complete_report(report), selection=selection)
     if "portraits" in stages:
-        report["portraits"] = await portraits.save(metadata.actors)
+        report["portraits"] = await portraits.save(metadata.actors, kind=actor_type(metadata.classification.category, work.category))
         report["stages"]["portraits"] = "failed" if any(r["status"] == "error" for r in report["portraits"]) else "success"
     runtime.save_selection(work.code, selection)
     return complete_report(report)

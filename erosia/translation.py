@@ -34,8 +34,7 @@ PROMPT = """将用户提供的文本忠实翻译为简体中文，只输出译�
 
 @lru_cache(maxsize=4)
 def actor_name_rules(names: ActorAliases):
-    values = sorted({name for primary, record in names.actors.items()
-                     for name in (primary, *record["aliases"]) if name.strip()}, key=lambda name: (-len(name), name))
+    values = sorted(names.all_names, key=lambda name: (-len(name), name))
     # Literal lookahead includes overlapping names; no normalization changes source spelling.
     pattern = re.compile("(?=(" + "|".join(re.escape(name) for name in values) + "))") if values else None
     digest = hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()

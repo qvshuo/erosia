@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from . import __version__
 from .contract import EDITABLE_FIELDS
-from .actors import ActorAliases, library_actors
+from .actors import ActorAliases, actor_type, library_actors
 from .directories import Directories
 from .images import crop_poster, actor_image, Gfriends, save_image_choices, selected_image, validate_resources
 from .models import Metadata, SourceId
@@ -496,7 +496,7 @@ def create_app(
             if not variant or variant["status"] != "found" or not variant.get("metadata"):
                 raise HTTPException(422, "source variant unavailable")
             metadata = Metadata.model_validate(variant["metadata"])
-            resolve_actor_names(metadata, ActorAliases.load(service.settings.actor_aliases_file))
+            resolve_actor_names(metadata, ActorAliases.load(service.settings.actor_aliases_file), service.runtime.work(key).category)
             variant["metadata"] = metadata.model_dump(mode="json")
             await service.translator.verify()
             variant = await service.translator.variant(variant)
@@ -616,7 +616,7 @@ def create_app(
     async def actors_library(query: str = ""):
         service = runner()
         works = [service.runtime.work(row["code"]) for row in service.runtime.works() if row["status"] not in ("invalid_key", "conflict")]
-        return library_actors(works, service.output, ActorAliases.load(service.settings.actor_aliases_file), query)
+        return await asyncio.to_thread(library_actors, works, service.output, ActorAliases.load(service.settings.actor_aliases_file), query)
 
     @app.get("/api/actors/{name}/portrait")
     async def actor_portrait(name: str):
@@ -633,13 +633,15 @@ def create_app(
                 raise ValueError("cannot update portraits while tasks are active")
             names = ActorAliases.load(service.settings.actor_aliases_file)
             works = [service.runtime.work(row["code"]) for row in service.runtime.works() if row["status"] not in ("invalid_key", "conflict")]
-            rows = library_actors(works, service.output, names, name)
+            rows = await asyncio.to_thread(library_actors, works, service.output, names, name)
             row = next((r for r in rows if r["name"] == name), None)
             if not row or not row["portrait_eligible"]:
                 raise HTTPException(422, "演员身份不明确或不适用")
             from .models import Actor
             async with Gfriends(service.settings, names, service.output) as portraits:
-                records = await portraits.save([Actor(name=n) for n in (row["actors"] or [name])], replace=True)
+                kinds = {actor_type(work.category) for work in works if work.code in row["codes"]}
+                kind = next(iter(kinds)) if len(kinds) == 1 else None
+                records = await portraits.save([Actor(name=n) for n in (row["actors"] or [name])], replace=True, kind=kind)
             return {"portraits": records}
 
     return app
